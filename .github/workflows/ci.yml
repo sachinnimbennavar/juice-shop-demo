@@ -30,3 +30,12 @@ jobs:
 
     - name: Run tests
       run: npm test
+
+    - name: SonarQube Scan
+      run: |
+        npm install -g sonarqube-scanner
+        sonar-scanner \
+          -Dsonar.projectKey=juice-shop-demo \
+          -Dsonar.sources=. \
+          -Dsonar.host.url=http://10.158.124.198:9000 \
+          -Dsonar.login=${{ secrets.SONAR_TOKEN }}
