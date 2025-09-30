@@ -8,7 +8,8 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # Use your self-hosted runner on the VM
+    runs-on: self-hosted
 
     steps:
     - name: Checkout repository
@@ -36,6 +37,6 @@ jobs:
         npm install -g sonarqube-scanner
         sonar-scanner \
           -Dsonar.projectKey=juice-shop-demo \
-          -Dsonar.sources=. \
-          -Dsonar.host.url=http://10.158.124.198:9000 \
-          -Dsonar.login=${{ secrets.SONAR_TOKEN }}
+          -Dsonar.host.url=http://localhost:9000 \
+          -Dsonar.token=${{ secrets.SONAR_TOKEN }} \
+          -Dsonar.sources=.
