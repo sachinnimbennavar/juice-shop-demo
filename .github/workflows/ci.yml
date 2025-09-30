@@ -30,3 +30,12 @@ jobs:
 
     - name: Run tests
       run: npm test
+
+    - name: SonarQube Scan
+      uses: sonarsource/sonarcloud-github-action@v2
+      with:
+        args: >
+          -Dsonar.projectKey=juice-shop-demo
+          -Dsonar.organization=your-org
+          -Dsonar.host.url=http://<your-sonar-host>:9000
+          -Dsonar.login=${{ secrets.SONAR_TOKEN }}
