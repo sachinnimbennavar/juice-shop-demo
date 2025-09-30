@@ -8,8 +8,8 @@ on:
 
 jobs:
   build:
-    # Run on your self-hosted Windows VM
-    runs-on: self-hosted
+    # Run on GitHub-hosted runner
+    runs-on: ubuntu-latest
 
     steps:
       # Step 1: Checkout repository
@@ -39,21 +39,15 @@ jobs:
         run: npm test
 
       # --------------------------
-      # SonarQube Integration
+      # Step 7: SonarQube Scan
       # --------------------------
-
-      # Step 7: Install SonarScanner
-      - name: Install SonarScanner
-        run: |
-          curl -sSLo sonar-scanner.zip https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-5.0.1.3006-windows.zip
-          tar -xf sonar-scanner.zip -C $env:USERPROFILE
-          echo "$env:USERPROFILE\sonar-scanner-5.0.1.3006-windows\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-      # Step 8: Run SonarQube scan
       - name: SonarQube Scan
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: |
-          sonar-scanner `
-            -Dsonar.projectKey=juice-shop-demo `
-            -Dsonar.sources=. `
-            -Dsonar.host.url=http://10.158.124.198:9000 `
-            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
+          npm install -g sonarqube-scanner
+          sonar-scanner \
+            -Dsonar.projectKey=juice-shop-demo \
+            -Dsonar.sources=. \
+            -Dsonar.host.url=http://10.158.124.198:9000 \
+            -Dsonar.login=$SONAR_TOKEN
