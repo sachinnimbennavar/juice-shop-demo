@@ -36,6 +36,5 @@ jobs:
       with:
         args: >
           -Dsonar.projectKey=juice-shop-demo
-          -Dsonar.organization=your-org
-          -Dsonar.host.url=http://<your-sonar-host>:9000
+          -Dsonar.host.url=http://10.158.124.198:9000
           -Dsonar.login=${{ secrets.SONAR_TOKEN }}
