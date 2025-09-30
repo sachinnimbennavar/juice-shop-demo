@@ -39,7 +39,13 @@ jobs:
         run: npm test
 
       # --------------------------
-      # Step 7: SonarQube Scan
+      # Step 7: Test SonarQube connectivity
+      # --------------------------
+      - name: Test SonarQube connectivity
+        run: curl -v http://10.158.124.198:9000
+
+      # --------------------------
+      # Step 8: SonarQube Scan
       # --------------------------
       - name: SonarQube Scan
         env:
