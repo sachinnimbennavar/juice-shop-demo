@@ -2,38 +2,60 @@ name: Juice Shop CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
 jobs:
   build:
-    runs-on: [self-hosted, Windows, X64]
+    runs-on:
+      - self-hosted
+      - Windows
+      - X64
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+    # 1️⃣ Checkout code
+    - name: Checkout code
+      uses: actions/checkout@v3
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
+    # 2️⃣ Setup Node.js 22
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: 22.x
+        cache: 'npm'
 
-      - name: Install dependencies
-        run: npm install
+    # 3️⃣ Install dependencies
+    - name: Install dependencies
+      run: |
+        npm ci
+      shell: powershell
 
-      - name: Build frontend
-        run: npm run build:frontend
+    # 4️⃣ Build frontend with increased memory
+    - name: Build frontend
+      run: |
+        set NODE_OPTIONS=--max_old_space_size=4096
+        cd frontend
+        npx ng build --configuration production --source-map=false
+      shell: powershell
 
-      - name: Build server
-        run: npm run build:server
+    # 5️⃣ Build server
+    - name: Build server
+      run: |
+        cd ..
+        npm run --silent build:server
+      shell: powershell
 
-      - name: Run tests
-        run: npm test
+    # 6️⃣ Run tests
+    - name: Run tests
+      run: |
+        npm test
+      shell: powershell
 
-      - name: SonarQube Scan
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        run: |
-          npm install -g sonarqube-scanner
-          sonar-scanner -Dsonar.projectKey=juice-shop-demo -Dsonar.sources=. -Dsonar.host.url=http://185.134.88.1:9000 -Dsonar.login=$SONAR_TOKEN
+    # 7️⃣ SonarQube scan (local VM example)
+    - name: SonarQube Scan
+      run: |
+        set SONAR_HOST_URL=http://185.134.88.1:9000
+        set SONAR_TOKEN=${{ secrets.SONAR_TOKEN }}
+        sonar-scanner
+      shell: powershell
