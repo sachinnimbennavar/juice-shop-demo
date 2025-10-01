@@ -18,24 +18,24 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v3
 
-    # 2️⃣ Setup Node.js 22 (cache disabled to avoid lock file errors)
+    # 2️⃣ Setup Node.js 22
     - name: Setup Node.js
       uses: actions/setup-node@v3
       with:
         node-version: 22.x
 
-    # 3️⃣ Install dependencies (works without package-lock.json)
+    # 3️⃣ Install dependencies (ignores lock file issues)
     - name: Install dependencies
       run: |
-        npm install --legacy-peer-deps --loglevel=error
+        npm install --legacy-peer-deps
       shell: powershell
 
-    # 4️⃣ Build frontend with increased memory
-    - name: Build frontend
+    # 4️⃣ Build frontend (2GB safe mode)
+    - name: Build frontend (2GB safe mode)
       run: |
-        $env:NODE_OPTIONS="--max-old-space-size=4096"
+        $env:NODE_OPTIONS="--max-old-space-size=2048"
         cd frontend
-        npx ng build --configuration production --source-map=false
+        npx ng build --configuration production --aot=false --build-optimizer=false --source-map=false
       shell: powershell
 
     # 5️⃣ Build server
@@ -51,10 +51,10 @@ jobs:
         npm test
       shell: powershell
 
-    # 7️⃣ SonarQube scan on local VM
+    # 7️⃣ SonarQube scan (on local VM)
     - name: SonarQube Scan
       run: |
-        $env:SONAR_HOST_URL="http://185.134.88.1:9000"
-        $env:SONAR_TOKEN="${{ secrets.SONAR_TOKEN }}"
+        set SONAR_HOST_URL=http://185.134.88.1:9000
+        set SONAR_TOKEN=${{ secrets.SONAR_TOKEN }}
         sonar-scanner
       shell: powershell
