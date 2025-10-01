@@ -18,11 +18,11 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v3
 
-    # 2️⃣ Setup Node.js (use 18.x for better stability & speed)
+    # 2️⃣ Setup Node.js
     - name: Setup Node.js
       uses: actions/setup-node@v3
       with:
-        node-version: 18.x
+        node-version: 22.x
 
     # 3️⃣ Cache frontend dependencies
     - name: Cache frontend node_modules
@@ -37,14 +37,14 @@ jobs:
     - name: Install frontend dependencies
       run: |
         cd frontend
-        npm ci --legacy-peer-deps
+        npm install --legacy-peer-deps
       shell: powershell
 
     # 5️⃣ Build frontend with 4GB memory
     - name: Build frontend
       run: |
-        cd frontend
         set NODE_OPTIONS=--max_old_space_size=4096
+        cd frontend
         npx ng build --configuration production --source-map=false
       shell: powershell
 
