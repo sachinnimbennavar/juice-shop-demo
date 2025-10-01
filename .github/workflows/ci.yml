@@ -24,34 +24,31 @@ jobs:
       with:
         node-version: 22.x
 
-    # 3️⃣ Install dependencies (ignores lock file issues)
+    # 3️⃣ Install dependencies
     - name: Install dependencies
-      run: |
-        npm install --legacy-peer-deps
+      run: npm install --legacy-peer-deps
       shell: powershell
 
-    # 4️⃣ Build frontend (2GB safe mode)
-    - name: Build frontend (2GB safe mode)
+    # 4️⃣ Build frontend with 4GB memory
+    - name: Build frontend
       run: |
-        $env:NODE_OPTIONS="--max-old-space-size=2048"
         cd frontend
-        npx ng build --configuration production --aot=false --build-optimizer=false --source-map=false
+        set NODE_OPTIONS=--max_old_space_size=4096
+        npx ng build --configuration production --source-map=false
+        cd ..
       shell: powershell
 
     # 5️⃣ Build server
     - name: Build server
-      run: |
-        cd ..
-        npm run --silent build:server
+      run: npm run --silent build:server
       shell: powershell
 
     # 6️⃣ Run tests
     - name: Run tests
-      run: |
-        npm test
+      run: npm test
       shell: powershell
 
-    # 7️⃣ SonarQube scan (on local VM)
+    # 7️⃣ SonarQube scan
     - name: SonarQube Scan
       run: |
         set SONAR_HOST_URL=http://185.134.88.1:9000
