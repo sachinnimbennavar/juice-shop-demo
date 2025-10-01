@@ -7,81 +7,78 @@ on:
     branches: ["main"]
 
 jobs:
-  setup:
+  frontend:
     runs-on:
       - self-hosted
       - Windows
       - X64
-    outputs:
-      node-path: ${{ steps.node.outputs.node-path }}
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v3
 
-    - name: Setup Node.js
-      id: node
-      uses: actions/setup-node@v3
-      with:
-        node-version: 22.x
+      - name: Setup Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18.x
 
-    - name: Install dependencies
-      run: npm install --legacy-peer-deps
-      shell: powershell
+      - name: Cache frontend dependencies
+        uses: actions/cache@v3
+        with:
+          path: frontend/node_modules
+          key: frontend-node-modules-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: frontend-node-modules-
 
-  build-frontend:
-    needs: setup
+      - name: Install frontend dependencies
+        run: |
+          cd frontend
+          npm install --legacy-peer-deps
+        shell: powershell
+
+      - name: Build frontend
+        run: |
+          cd frontend
+          set NODE_OPTIONS=--max_old_space_size=4096
+          npx ng build --configuration production --source-map=false
+        shell: powershell
+
+  backend:
     runs-on:
       - self-hosted
       - Windows
       - X64
+    needs: frontend  # backend can start after frontend checkout finishes
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v3
 
-    - name: Setup Node.js
-      uses: actions/setup-node@v3
-      with:
-        node-version: 22.x
+      - name: Setup Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18.x
 
-    - name: Build frontend
-      run: |
-        set NODE_OPTIONS=--max_old_space_size=4096
-        cd frontend
-        npx ng build --configuration production --source-map=false
-      shell: powershell
+      - name: Cache backend dependencies
+        uses: actions/cache@v3
+        with:
+          path: node_modules
+          key: backend-node-modules-${{ hashFiles('package-lock.json') }}
+          restore-keys: backend-node-modules-
 
-  build-server:
-    needs: setup
-    runs-on:
-      - self-hosted
-      - Windows
-      - X64
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
+      - name: Install backend dependencies
+        run: npm install --legacy-peer-deps
+        shell: powershell
 
-    - name: Setup Node.js
-      uses: actions/setup-node@v3
-      with:
-        node-version: 22.x
+      - name: Build backend
+        run: npm run --silent build:server
+        shell: powershell
 
-    - name: Build server
-      run: npm run --silent build:server
-      shell: powershell
+      - name: Run tests
+        run: npm test
+        shell: powershell
 
-  sonar-scan:
-    needs: [build-frontend, build-server]
-    runs-on:
-      - self-hosted
-      - Windows
-      - X64
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
-
-    - name: SonarQube Scan
-      run: |
-        set SONAR_HOST_URL=http://127.0.0.1:9000
-        set SONAR_TOKEN=${{ secrets.SONAR_TOKEN }}
-        sonar-scanner
-      shell: powershell
+      - name: SonarQube Scan
+        run: |
+          set SONAR_HOST_URL=http://185.134.88.1:9000
+          set SONAR_TOKEN=${{ secrets.SONAR_TOKEN }}
+          sonar-scanner
+        shell: powershell
