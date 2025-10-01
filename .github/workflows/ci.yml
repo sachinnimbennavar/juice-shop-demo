@@ -8,44 +8,37 @@ on:
 
 jobs:
   build:
-    runs-on: self-hosted  # Use your Windows self-hosted runner
+    # Run on your self-hosted runner
+    runs-on: [self-hosted, Windows, X64]
 
     steps:
-      # 1️⃣ Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2️⃣ Setup Node.js
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'  # match your local Node version
+          node-version: '20'
 
-      # 3️⃣ Install dependencies
-      - name: Install npm dependencies
-        run: npm install --legacy-peer-deps
+      - name: Install dependencies
+        run: npm install
 
-      # 4️⃣ Build frontend
       - name: Build frontend
         run: npm run build:frontend
 
-      # 5️⃣ Build server/backend
       - name: Build server
         run: npm run build:server
 
-      # 6️⃣ Run tests
       - name: Run tests
         run: npm test
 
-      # 7️⃣ SonarQube Scan
       - name: SonarQube Scan
         env:
-          SONAR_HOST_URL: http://<YOUR_PUBLIC_IP>:9000   # replace with your VM public IP
-          SONAR_LOGIN: ${{ secrets.SONAR_TOKEN }}        # store your Sonar token in repo secrets
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: |
           npm install -g sonarqube-scanner
-          sonar-scanner \
-            -Dsonar.projectKey=juice-shop-demo \
-            -Dsonar.sources=. \
-            -Dsonar.host.url=$SONAR_HOST_URL \
-            -Dsonar.login=$SONAR_LOGIN
+          sonar-scanner ^
+            -Dsonar.projectKey=juice-shop-demo ^
+            -Dsonar.sources=. ^
+            -Dsonar.host.url=http://<PUBLIC_IP>:9000 ^
+            -Dsonar.login=$SONAR_TOKEN
