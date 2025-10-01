@@ -81,7 +81,7 @@ jobs:
 
     - name: SonarQube Scan
       run: |
-        set SONAR_HOST_URL=http://185.134.88.1:9000
+        set SONAR_HOST_URL=http://127.0.0.1:9000
         set SONAR_TOKEN=${{ secrets.SONAR_TOKEN }}
         sonar-scanner
       shell: powershell
