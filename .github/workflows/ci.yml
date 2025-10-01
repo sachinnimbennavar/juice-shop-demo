@@ -7,67 +7,68 @@ on:
     branches: ["main"]
 
 jobs:
-  build:
+  frontend:
     runs-on:
       - self-hosted
       - Windows
       - X64
 
     steps:
-      # 1️⃣ Checkout repository
-      - name: Checkout code
-        uses: actions/checkout@v3
+    - name: Checkout repository
+      uses: actions/checkout@v3
 
-      # 2️⃣ Setup Node.js 22
-      - name: Setup Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: 22.x
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: 22.x
 
-      # 3️⃣ Cache frontend dependencies
-      - name: Cache frontend dependencies
-        uses: actions/cache@v3
-        with:
-          path: frontend/node_modules
-          key: frontend-node-modules-${{ hashFiles('frontend/package-lock.json') }}
-          restore-keys: frontend-node-modules-
+    - name: Cache frontend node_modules
+      uses: actions/cache@v3
+      with:
+        path: frontend/node_modules
+        key: frontend-node-modules-${{ hashFiles('frontend/package-lock.json') }}
+        restore-keys: |
+          frontend-node-modules-
 
-      # 4️⃣ Cache server dependencies
-      - name: Cache server dependencies
-        uses: actions/cache@v3
-        with:
-          path: node_modules
-          key: server-node-modules-${{ hashFiles('package-lock.json') }}
-          restore-keys: server-node-modules-
+    - name: Install frontend dependencies
+      run: npm install --legacy-peer-deps
+      working-directory: frontend
+      shell: powershell
 
-      # 5️⃣ Install frontend dependencies
-      - name: Install frontend dependencies
-        run: npm install --legacy-peer-deps
-        working-directory: frontend
-        shell: powershell
+    - name: Build frontend
+      run: |
+        set NODE_OPTIONS=--max_old_space_size=4096
+        npx ng build --configuration production --source-map=false
+      working-directory: frontend
+      shell: powershell
 
-      # 6️⃣ Build frontend incrementally with 4GB memory
-      - name: Build frontend
-        run: |
-          set NODE_OPTIONS=--max_old_space_size=4096
-          npx ng build --configuration production --source-map=false --incremental
-        working-directory: frontend
-        shell: powershell
+  server:
+    runs-on:
+      - self-hosted
+      - Windows
+      - X64
+    needs: frontend
 
-      # 7️⃣ Install server dependencies
-      - name: Install server dependencies
-        run: npm install --legacy-peer-deps
-        shell: powershell
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
 
-      # 8️⃣ Build server
-      - name: Build server
-        run: npm run --silent build:server
-        shell: powershell
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: 22.x
 
-      # 9️⃣ SonarQube scan
-      - name: SonarQube Scan
-        run: |
-          set SONAR_HOST_URL=http://185.134.88.1:9000
-          set SONAR_TOKEN=${{ secrets.SONAR_TOKEN }}
-          sonar-scanner
-        shell: powershell
+    - name: Install server dependencies
+      run: npm install --legacy-peer-deps
+      shell: powershell
+
+    - name: Build server
+      run: npm run --silent build:server
+      shell: powershell
+
+    - name: SonarQube Scan
+      run: |
+        set SONAR_HOST_URL=http://127.0.0.1:9000
+        set SONAR_TOKEN=${{ secrets.SONAR_TOKEN }}
+        sonar-scanner
+      shell: powershell
