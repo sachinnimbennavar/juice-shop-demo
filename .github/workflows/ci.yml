@@ -14,16 +14,15 @@ jobs:
       - X64
 
     steps:
-    # 1️⃣ Checkout code
+    # 1️⃣ Checkout repository
     - name: Checkout code
       uses: actions/checkout@v3
 
-    # 2️⃣ Setup Node.js 22
+    # 2️⃣ Setup Node.js (cache disabled to avoid lock file error)
     - name: Setup Node.js
       uses: actions/setup-node@v3
       with:
         node-version: 22.x
-        cache: 'npm'
 
     # 3️⃣ Install dependencies
     - name: Install dependencies
@@ -52,7 +51,7 @@ jobs:
         npm test
       shell: powershell
 
-    # 7️⃣ SonarQube scan (local VM example)
+    # 7️⃣ SonarQube scan on local VM
     - name: SonarQube Scan
       run: |
         set SONAR_HOST_URL=http://185.134.88.1:9000
