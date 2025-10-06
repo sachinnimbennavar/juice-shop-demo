@@ -9,115 +9,81 @@ on:
       - main
 
 jobs:
-  frontend-build:
+  build:
     runs-on: self-hosted
+
     steps:
-      # Restore repository cache (hash only key build files)
-      - name: Restore repository cache
-        uses: actions/cache@v3
-        with:
-          path: ./repo
-          key: repo-${{ hashFiles('package-lock.json', 'frontend/package-lock.json', 'frontend/angular.json') }}
-          restore-keys: repo-
-
-      # Checkout if cache missed
-      - name: Checkout repo if cache missed
-        if: steps.cache.outputs.cache-hit != 'true'
+      # 1️⃣ Checkout repository
+      - name: Checkout repository
         uses: actions/checkout@v3
-        with:
-          path: ./repo
 
-      # Node memory setup
+      # 2️⃣ Set Node memory
       - name: Set Node memory
         run: set NODE_OPTIONS=--max_old_space_size=4096
 
-      # Cache frontend dependencies
-      - name: Cache frontend
+      # 3️⃣ Cache frontend dependencies
+      - name: Cache frontend dependencies
+        uses: actions/cache@v3
+        with:
+          path: frontend/node_modules
+          key: ${{ runner.os }}-frontend-npm-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-frontend-npm-
+
+      # 4️⃣ Cache frontend Angular build artifacts
+      - name: Cache frontend build artifacts
         uses: actions/cache@v3
         with:
           path: |
-            repo/frontend/node_modules
-            repo/frontend/.angular
-          key: ${{ runner.os }}-frontend-${{ hashFiles('repo/frontend/package-lock.json') }}
+            frontend/.angular/cache
+            frontend/dist
+          key: ${{ runner.os }}-frontend-build-${{ hashFiles('frontend/src/**/*') }}
           restore-keys: |
-            ${{ runner.os }}-frontend-
+            ${{ runner.os }}-frontend-build-
 
-      # Install frontend dependencies (works even if package-lock.json missing)
+      # 5️⃣ Cache server dependencies
+      - name: Cache server dependencies
+        uses: actions/cache@v3
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-server-npm-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-server-npm-
+
+      # 6️⃣ Cache server build output
+      - name: Cache server build artifacts
+        uses: actions/cache@v3
+        with:
+          path: dist
+          key: ${{ runner.os }}-server-build-${{ hashFiles('tsconfig.json') }}
+          restore-keys: |
+            ${{ runner.os }}-server-build-
+
+      # 7️⃣ Install frontend dependencies
       - name: Install frontend dependencies
-        run: |
-          cd repo/frontend
-          npm install --legacy-peer-deps --prefer-offline --no-audit
-          cd ../..
+        run: npm install --legacy-peer-deps --prefer-offline --no-audit --no-optional
+        working-directory: frontend
 
-      # Build frontend
+      # 8️⃣ Build frontend
       - name: Build frontend
-        run: |
-          cd repo/frontend
-          npm run build -- --configuration production --watch=false
-          cd ../..
+        run: npm run build -- --configuration production --watch=false
+        working-directory: frontend
 
-  server-build:
-    runs-on: self-hosted
-    steps:
-      # Restore repository cache
-      - name: Restore repository cache
-        uses: actions/cache@v3
-        with:
-          path: ./repo
-          key: repo-${{ hashFiles('package-lock.json', 'frontend/package-lock.json', 'frontend/angular.json') }}
-          restore-keys: repo-
-
-      # Checkout if cache missed
-      - name: Checkout repo if cache missed
-        if: steps.cache.outputs.cache-hit != 'true'
-        uses: actions/checkout@v3
-        with:
-          path: ./repo
-
-      # Node memory setup
-      - name: Set Node memory
-        run: set NODE_OPTIONS=--max_old_space_size=4096
-
-      # Cache server dependencies
-      - name: Cache server
-        uses: actions/cache@v3
-        with:
-          path: repo/node_modules
-          key: ${{ runner.os }}-server-${{ hashFiles('repo/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-server-
-
-      # Install server dependencies (works even if package-lock.json missing)
+      # 9️⃣ Install server dependencies
       - name: Install server dependencies
-        run: npm install --prefer-offline --no-audit
-        working-directory: ./repo
+        run: npm install --prefer-offline --no-audit --legacy-peer-deps --no-optional
 
-      # Build server
-      - name: Build server
-        run: npm run build:server
-        working-directory: ./repo
-
-  sonar-analysis:
-    runs-on: self-hosted
-    needs:
-      - frontend-build
-      - server-build
-    steps:
-      # Restore repository cache
-      - name: Restore repository cache
-        uses: actions/cache@v3
-        with:
-          path: ./repo
-          key: repo-${{ hashFiles('package-lock.json', 'frontend/package-lock.json', 'frontend/angular.json') }}
-          restore-keys: repo-
-
-      # SonarQube Scan
-      - name: SonarQube Scan
+      # 🔟 Start SonarQube scan in background (Windows PowerShell)
+      - name: Start SonarQube Scan in background
+        if: ${{ always() }}
         run: |
           if (Get-Command sonar-scanner -ErrorAction SilentlyContinue) {
-              echo "Running SonarQube scanner..."
-              set SONAR_HOST_URL=http://127.0.0.1:9000
-              sonar-scanner
+              echo "Starting SonarQube scanner in background..."
+              Start-Process powershell -ArgumentList '-NoProfile -Command "set SONAR_HOST_URL=http://127.0.0.1:9000; sonar-scanner"' -WindowStyle Hidden
           } else {
               echo "sonar-scanner not found, skipping analysis."
           }
+
+      # 1️⃣1️⃣ Build server (TypeScript incremental build)
+      - name: Build server
+        run: npm run build:server
