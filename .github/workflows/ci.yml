@@ -13,77 +13,64 @@ jobs:
     runs-on: self-hosted
 
     steps:
-      # 1️⃣ Checkout repository
+      # 1️⃣ Checkout the repository
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2️⃣ Set Node memory
+      # 2️⃣ Set Node memory for server build
       - name: Set Node memory
         run: set NODE_OPTIONS=--max_old_space_size=4096
 
-      # 3️⃣ Cache frontend dependencies
-      - name: Cache frontend dependencies
-        uses: actions/cache@v3
-        with:
-          path: frontend/node_modules
-          key: ${{ runner.os }}-frontend-npm-${{ hashFiles('frontend/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-frontend-npm-
-
-      # 4️⃣ Cache frontend Angular build artifacts
-      - name: Cache frontend build artifacts
+      # 3️⃣ Cache frontend dependencies and Angular build output
+      - name: Cache frontend
         uses: actions/cache@v3
         with:
           path: |
-            frontend/.angular/cache
+            frontend/node_modules
             frontend/dist
-          key: ${{ runner.os }}-frontend-build-${{ hashFiles('frontend/src/**/*') }}
+            frontend/.angular
+          key: ${{ runner.os }}-frontend-${{ hashFiles('frontend/package-lock.json') }}
           restore-keys: |
-            ${{ runner.os }}-frontend-build-
+            ${{ runner.os }}-frontend-
 
-      # 5️⃣ Cache server dependencies
-      - name: Cache server dependencies
+      # 4️⃣ Cache server dependencies
+      - name: Cache server
         uses: actions/cache@v3
         with:
           path: node_modules
-          key: ${{ runner.os }}-server-npm-${{ hashFiles('package-lock.json') }}
+          key: ${{ runner.os }}-server-${{ hashFiles('package-lock.json') }}
           restore-keys: |
-            ${{ runner.os }}-server-npm-
+            ${{ runner.os }}-server-
 
-      # 6️⃣ Cache server build output
-      - name: Cache server build artifacts
-        uses: actions/cache@v3
-        with:
-          path: dist
-          key: ${{ runner.os }}-server-build-${{ hashFiles('tsconfig.json') }}
-          restore-keys: |
-            ${{ runner.os }}-server-build-
-
-      # 7️⃣ Install frontend dependencies
+      # 5️⃣ Install frontend dependencies
       - name: Install frontend dependencies
-        run: npm install --legacy-peer-deps --prefer-offline --no-audit --no-optional
-        working-directory: frontend
-
-      # 8️⃣ Build frontend
-      - name: Build frontend
-        run: npm run build -- --configuration production --watch=false
-        working-directory: frontend
-
-      # 9️⃣ Install server dependencies
-      - name: Install server dependencies
-        run: npm install --prefer-offline --no-audit --legacy-peer-deps --no-optional
-
-      # 🔟 Start SonarQube scan in background (Windows PowerShell)
-      - name: Start SonarQube Scan in background
-        if: ${{ always() }}
         run: |
-          if (Get-Command sonar-scanner -ErrorAction SilentlyContinue) {
-              echo "Starting SonarQube scanner in background..."
-              Start-Process powershell -ArgumentList '-NoProfile -Command "set SONAR_HOST_URL=http://127.0.0.1:9000; sonar-scanner"' -WindowStyle Hidden
-          } else {
-              echo "sonar-scanner not found, skipping analysis."
-          }
+          cd frontend
+          npm install --legacy-peer-deps --prefer-offline --no-audit
+          cd ..
 
-      # 1️⃣1️⃣ Build server (TypeScript incremental build)
+      # 6️⃣ Build frontend (Angular incremental build handled automatically)
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm run build -- --configuration production --watch=false --verbose
+          cd ..
+
+      # 7️⃣ Install server dependencies
+      - name: Install server dependencies
+        run: npm install --prefer-offline --no-audit
+
+      # 8️⃣ Build server
       - name: Build server
         run: npm run build:server
+
+      # 9️⃣ Optional SonarQube analysis (safe skip if not installed)
+      - name: SonarQube Scan
+        run: |
+          if (Get-Command sonar-scanner -ErrorAction SilentlyContinue) {
+              echo "Running SonarQube scanner..."
+              set SONAR_HOST_URL=http://127.0.0.1:9000
+              sonar-scanner
+          } else {
+              echo "sonar-scanner not found, skipping SonarQube analysis."
+          }
