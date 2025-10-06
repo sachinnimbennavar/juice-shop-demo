@@ -11,21 +11,18 @@ on:
 jobs:
   build:
     runs-on: self-hosted
-    strategy:
-      matrix:
-        job: [frontend, server]
 
     steps:
       # 1️⃣ Checkout code
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2️⃣ Set Node memory globally
+      # 2️⃣ Set Node memory globally for server build
       - name: Set Node memory
         run: set NODE_OPTIONS=--max_old_space_size=4096
 
-      # 3️⃣ Cache frontend dependencies and Angular build output
-      - name: Cache frontend node_modules and Angular build
+      # 3️⃣ Cache frontend dependencies and Angular incremental build
+      - name: Cache frontend
         uses: actions/cache@v3
         with:
           path: |
@@ -37,7 +34,7 @@ jobs:
             ${{ runner.os }}-frontend-
 
       # 4️⃣ Cache server dependencies
-      - name: Cache server dependencies
+      - name: Cache server
         uses: actions/cache@v3
         with:
           path: node_modules
@@ -46,33 +43,28 @@ jobs:
             ${{ runner.os }}-server-
 
       # 5️⃣ Install frontend dependencies
-      - name: Install frontend deps
-        if: matrix.job == 'frontend'
+      - name: Install frontend dependencies
         run: |
           cd frontend
-          npm ci --legacy-peer-deps --prefer-offline --no-audit
+          npm install --legacy-peer-deps --prefer-offline --no-audit
           cd ..
 
-      # 6️⃣ Install server dependencies
-      - name: Install server deps
-        if: matrix.job == 'server'
-        run: npm ci --prefer-offline --no-audit
-
-      # 7️⃣ Build frontend incrementally
+      # 6️⃣ Build frontend incrementally
       - name: Build frontend
-        if: matrix.job == 'frontend'
         run: |
           cd frontend
-          # Use Angular cache for incremental build
           npm run build -- --configuration production --watch=false --verbose --incremental
           cd ..
 
+      # 7️⃣ Install server dependencies
+      - name: Install server dependencies
+        run: npm install --prefer-offline --no-audit
+
       # 8️⃣ Build server
       - name: Build server
-        if: matrix.job == 'server'
         run: npm run build:server
 
-      # 9️⃣ Optional SonarQube
+      # 9️⃣ Optional SonarQube analysis
       - name: SonarQube Scan
         shell: pwsh
         run: |
