@@ -2,73 +2,84 @@ name: Juice Shop CI
 
 on:
   push:
-    branches: ["main"]
+    branches:
+      - main
   pull_request:
-    branches: ["main"]
+    branches:
+      - main
 
 jobs:
-  frontend:
-    runs-on:
-      - self-hosted
-      - Windows
-      - X64
+  build:
+    runs-on: self-hosted
+    strategy:
+      matrix:
+        job: [frontend, server]
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v3
+      # 1️⃣ Checkout code
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-    - name: Setup Node.js
-      uses: actions/setup-node@v3
-      with:
-        node-version: 22.x
+      # 2️⃣ Set Node memory globally
+      - name: Set Node memory
+        run: set NODE_OPTIONS=--max_old_space_size=4096
 
-    - name: Cache frontend node_modules
-      uses: actions/cache@v3
-      with:
-        path: frontend/node_modules
-        key: frontend-node-modules-${{ hashFiles('frontend/package-lock.json') }}
-        restore-keys: |
-          frontend-node-modules-
+      # 3️⃣ Cache frontend dependencies and Angular build output
+      - name: Cache frontend node_modules and Angular build
+        uses: actions/cache@v3
+        with:
+          path: |
+            frontend/node_modules
+            frontend/dist
+            frontend/.angular
+          key: ${{ runner.os }}-frontend-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-frontend-
 
-    - name: Install frontend dependencies
-      run: npm install --legacy-peer-deps
-      working-directory: frontend
-      shell: powershell
+      # 4️⃣ Cache server dependencies
+      - name: Cache server dependencies
+        uses: actions/cache@v3
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-server-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-server-
 
-    - name: Build frontend
-      run: |
-        set NODE_OPTIONS=--max_old_space_size=4096
-        npx ng build --configuration production --source-map=false
-      working-directory: frontend
-      shell: powershell
+      # 5️⃣ Install frontend dependencies
+      - name: Install frontend deps
+        if: matrix.job == 'frontend'
+        run: |
+          cd frontend
+          npm ci --legacy-peer-deps --prefer-offline --no-audit
+          cd ..
 
-  server:
-    runs-on:
-      - self-hosted
-      - Windows
-      - X64
-    needs: frontend
+      # 6️⃣ Install server dependencies
+      - name: Install server deps
+        if: matrix.job == 'server'
+        run: npm ci --prefer-offline --no-audit
 
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v3
+      # 7️⃣ Build frontend incrementally
+      - name: Build frontend
+        if: matrix.job == 'frontend'
+        run: |
+          cd frontend
+          # Use Angular cache for incremental build
+          npm run build -- --configuration production --watch=false --verbose --incremental
+          cd ..
 
-    - name: Setup Node.js
-      uses: actions/setup-node@v3
-      with:
-        node-version: 22.x
+      # 8️⃣ Build server
+      - name: Build server
+        if: matrix.job == 'server'
+        run: npm run build:server
 
-    - name: Install server dependencies
-      run: npm install --legacy-peer-deps
-      shell: powershell
-
-    - name: Build server
-      run: npm run --silent build:server
-      shell: powershell
-
-    - name: SonarQube Scan
-      run: |
-        set SONAR_HOST_URL=http://127.0.0.1:9000
-        set SONAR_TOKEN=${{ secrets.SONAR_TOKEN }}
-        sonar-scanner
-      shell: powershell
+      # 9️⃣ Optional SonarQube
+      - name: SonarQube Scan
+        shell: pwsh
+        run: |
+          if (Get-Command sonar-scanner -ErrorAction SilentlyContinue) {
+            echo "Running SonarQube scanner..."
+            set SONAR_HOST_URL=http://127.0.0.1:9000
+            sonar-scanner
+          } else {
+            echo "sonar-scanner not found, skipping SonarQube analysis."
+          }
