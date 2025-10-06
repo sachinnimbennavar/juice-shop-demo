@@ -13,15 +13,15 @@ jobs:
     runs-on: self-hosted
 
     steps:
-      # 1️⃣ Checkout code
+      # 1️⃣ Checkout the repository
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2️⃣ Set Node memory globally for server build
+      # 2️⃣ Set Node memory for server build
       - name: Set Node memory
         run: set NODE_OPTIONS=--max_old_space_size=4096
 
-      # 3️⃣ Cache frontend dependencies and Angular incremental build
+      # 3️⃣ Cache frontend dependencies and Angular build output
       - name: Cache frontend
         uses: actions/cache@v3
         with:
@@ -49,11 +49,11 @@ jobs:
           npm install --legacy-peer-deps --prefer-offline --no-audit
           cd ..
 
-      # 6️⃣ Build frontend incrementally
+      # 6️⃣ Build frontend (corrected, no --incremental)
       - name: Build frontend
         run: |
           cd frontend
-          npm run build -- --configuration production --watch=false --verbose --incremental
+          npm run build -- --configuration production --watch=false --verbose
           cd ..
 
       # 7️⃣ Install server dependencies
