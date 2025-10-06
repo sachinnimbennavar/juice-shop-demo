@@ -49,7 +49,7 @@ jobs:
           npm install --legacy-peer-deps --prefer-offline --no-audit
           cd ..
 
-      # 6️⃣ Build frontend (corrected, no --incremental)
+      # 6️⃣ Build frontend (Angular incremental build handled automatically)
       - name: Build frontend
         run: |
           cd frontend
@@ -64,14 +64,13 @@ jobs:
       - name: Build server
         run: npm run build:server
 
-      # 9️⃣ Optional SonarQube analysis
+      # 9️⃣ Optional SonarQube analysis (safe skip if not installed)
       - name: SonarQube Scan
-        shell: pwsh
         run: |
           if (Get-Command sonar-scanner -ErrorAction SilentlyContinue) {
-            echo "Running SonarQube scanner..."
-            set SONAR_HOST_URL=http://127.0.0.1:9000
-            sonar-scanner
+              echo "Running SonarQube scanner..."
+              set SONAR_HOST_URL=http://127.0.0.1:9000
+              sonar-scanner
           } else {
-            echo "sonar-scanner not found, skipping SonarQube analysis."
+              echo "sonar-scanner not found, skipping SonarQube analysis."
           }
