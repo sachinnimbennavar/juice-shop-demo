@@ -42,11 +42,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-frontend-
 
-      # Install frontend dependencies
+      # Install frontend dependencies (works even if package-lock.json missing)
       - name: Install frontend dependencies
         run: |
           cd repo/frontend
-          npm ci --legacy-peer-deps --prefer-offline --no-audit
+          npm install --legacy-peer-deps --prefer-offline --no-audit
           cd ../..
 
       # Build frontend
@@ -59,7 +59,7 @@ jobs:
   server-build:
     runs-on: self-hosted
     steps:
-      # Restore repository cache (same hash key as frontend)
+      # Restore repository cache
       - name: Restore repository cache
         uses: actions/cache@v3
         with:
@@ -87,9 +87,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-server-
 
-      # Install server dependencies
+      # Install server dependencies (works even if package-lock.json missing)
       - name: Install server dependencies
-        run: npm ci --prefer-offline --no-audit
+        run: npm install --prefer-offline --no-audit
+        working-directory: ./repo
 
       # Build server
       - name: Build server
