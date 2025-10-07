@@ -74,3 +74,32 @@ jobs:
           } else {
               echo "sonar-scanner not found, skipping SonarQube analysis."
           }
+
+      # 🔟 Upload build artifacts to Nexus (direct files, no zipping)
+      - name: Upload build artifacts to Nexus
+        env:
+          NEXUS_URL: ${{ secrets.NEXUS_URL }}
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+        run: |
+          # Upload Angular frontend dist files
+          cd frontend/dist
+          foreach ($file in Get-ChildItem -Recurse -File) {
+              $relativePath = $file.FullName.Substring($PWD.Path.Length + 1).Replace("\","/")
+              Write-Host "Uploading $relativePath"
+              curl -v -u "$env:NEXUS_USERNAME:$env:NEXUS_PASSWORD" `
+                --upload-file $file.FullName `
+                "$env:NEXUS_URL/frontend/$relativePath"
+          }
+          cd ../../..
+
+          # Upload server build files
+          cd server/build
+          foreach ($file in Get-ChildItem -Recurse -File) {
+              $relativePath = $file.FullName.Substring($PWD.Path.Length + 1).Replace("\","/")
+              Write-Host "Uploading $relativePath"
+              curl -v -u "$env:NEXUS_USERNAME:$env:NEXUS_PASSWORD" `
+                --upload-file $file.FullName `
+                "$env:NEXUS_URL/server/$relativePath"
+          }
+          cd ../..
