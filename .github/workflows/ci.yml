@@ -11,64 +11,78 @@ on:
 jobs:
   build:
     runs-on: self-hosted
+
     steps:
-      - name: Checkout code
+      # 1️⃣ Checkout the repository
+      - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: 20
+      # 2️⃣ Set Node memory for server build
+      - name: Set Node memory
+        run: set NODE_OPTIONS=--max_old_space_size=4096
 
+      # 3️⃣ Cache frontend dependencies and Angular build output
+      - name: Cache frontend
+        uses: actions/cache@v3
+        with:
+          path: |
+            frontend/node_modules
+            frontend/dist
+            frontend/.angular
+          key: ${{ runner.os }}-frontend-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-frontend-
+
+      # 4️⃣ Cache server dependencies
+      - name: Cache server
+        uses: actions/cache@v3
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-server-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-server-
+
+      # 5️⃣ Install frontend dependencies
       - name: Install frontend dependencies
-        working-directory: frontend
-        run: npm install
+        run: |
+          cd frontend
+          npm install --legacy-peer-deps --prefer-offline --no-audit
+          cd ..
 
+      # 6️⃣ Build frontend (Angular incremental build handled automatically)
       - name: Build frontend
-        working-directory: frontend
-        run: npm run build -- --configuration production --source-map=false
+        run: |
+          cd frontend
+          npm run build -- --configuration production --watch=false --verbose
+          cd ..
 
+      # 7️⃣ Install server dependencies
       - name: Install server dependencies
-        working-directory: server
-        run: npm install
+        run: npm install --prefer-offline --no-audit
 
+      # 8️⃣ Build server
       - name: Build server
-        working-directory: server
-        run: npm run build
+        run: npm run build:server
 
-      - name: SonarQube Analysis
-        uses: sonarsource/sonarcloud-github-action@v2
-        with:
-          projectBaseDir: .
-          args: >
-            -Dsonar.projectKey=juice-shop-demo
-            -Dsonar.organization=your-org
-            -Dsonar.host.url=https://sonarcloud.io
-            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
-
-      - name: Compress and upload frontend build
-        shell: pwsh
+      # 9️⃣ Optional SonarQube analysis (safe skip if not installed)
+      - name: SonarQube Scan
         run: |
-          $frontendZip = "frontend.zip"
-          if (Test-Path $frontendZip) { Remove-Item $frontendZip }
-          Compress-Archive -Path frontend/dist/* -DestinationPath $frontendZip
-          Write-Host "Uploading $frontendZip to Nexus"
-          & "C:\Windows\System32\curl.exe" -v -u "$env:NEXUS_USERNAME:$env:NEXUS_PASSWORD" `
-            --upload-file $frontendZip `
-            "$env:NEXUS_URL/frontend/$frontendZip"
-
-      - name: Compress and upload server build
-        shell: pwsh
-        run: |
-          $serverBuildPath = "server/build"
-          $serverZip = "server.zip"
-          if (-Not (Test-Path $serverBuildPath)) {
-            Write-Host "Server build folder not found. Skipping upload."
+          if (Get-Command sonar-scanner -ErrorAction SilentlyContinue) {
+              echo "Running SonarQube scanner..."
+              set SONAR_HOST_URL=http://127.0.0.1:9000
+              sonar-scanner
           } else {
-            if (Test-Path $serverZip) { Remove-Item $serverZip }
-            Compress-Archive -Path "$serverBuildPath/*" -DestinationPath $serverZip
-            Write-Host "Uploading $serverZip to Nexus"
-            & "C:\Windows\System32\curl.exe" -v -u "$env:NEXUS_USERNAME:$env:NEXUS_PASSWORD" `
-              --upload-file $serverZip `
-              "$env:NEXUS_URL/server/$serverZip"
+              echo "sonar-scanner not found, skipping SonarQube analysis."
           }
+
+      # 🔟 Nexus upload
+      - name: Upload to Nexus
+        if: github.event.inputs.nexus_only == 'true' || github.event_name == 'push'
+        run: |
+          echo "Uploading frontend and server builds to Nexus..."
+          curl -v -u ${{ secrets.NEXUS_USER }}:${{ secrets.NEXUS_PASSWORD }} \
+            --upload-file frontend/dist/frontend.zip \
+            http://nexus.example.com/repository/juiceshop-frontend/frontend.zip
+          curl -v -u ${{ secrets.NEXUS_USER }}:${{ secrets.NEXUS_PASSWORD }} \
+            --upload-file server/build/server.zip \
+            http://nexus.example.com/repository/juiceshop-server/server.zip
