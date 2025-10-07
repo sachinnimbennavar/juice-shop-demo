@@ -12,72 +12,63 @@ jobs:
   build:
     runs-on: self-hosted
     steps:
-      # Step 1: Checkout code
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v3
 
-      # Step 2: Set up Node.js
       - name: Set up Node.js
         uses: actions/setup-node@v3
         with:
-          node-version: '18'
+          node-version: 20
 
-      # Step 3: Install dependencies
-      - name: Install dependencies
-        run: npm ci
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm install
 
-      # Step 4: Build frontend
-      - name: Build Angular frontend
-        run: |
-          set NODE_OPTIONS=--max_old_space_size=4096
-          npx ng build --configuration production --source-map=false
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build -- --configuration production --source-map=false
 
-      # Step 5: Build server (if any server build exists)
+      - name: Install server dependencies
+        working-directory: server
+        run: npm install
+
       - name: Build server
+        working-directory: server
+        run: npm run build
+
+      - name: SonarQube Analysis
+        uses: sonarsource/sonarcloud-github-action@v2
+        with:
+          projectBaseDir: .
+          args: >
+            -Dsonar.projectKey=juice-shop-demo
+            -Dsonar.organization=your-org
+            -Dsonar.host.url=https://sonarcloud.io
+            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
+
+      - name: Compress and upload frontend build
+        shell: pwsh
         run: |
-          cd server
-          npm install
-          npm run build
-          cd ..
+          $frontendZip = "frontend.zip"
+          if (Test-Path $frontendZip) { Remove-Item $frontendZip }
+          Compress-Archive -Path frontend/dist/* -DestinationPath $frontendZip
+          Write-Host "Uploading $frontendZip to Nexus"
+          & "C:\Windows\System32\curl.exe" -v -u "$env:NEXUS_USERNAME:$env:NEXUS_PASSWORD" `
+            --upload-file $frontendZip `
+            "$env:NEXUS_URL/frontend/$frontendZip"
 
-      # Step 6: Run tests
-      - name: Run tests
-        run: npm test
-
-      # Step 7: Upload builds to Nexus (robust)
-      - name: Upload builds to Nexus
-        shell: powershell
+      - name: Compress and upload server build
+        shell: pwsh
         run: |
-          Write-Host "📦 Uploading frontend build files..."
-          if (Test-Path frontend/dist) {
-              cd frontend/dist
-              Get-ChildItem -Recurse -File | ForEach-Object {
-                  $relativePath = $_.FullName.Substring($PWD.Path.Length + 1).Replace("\","/")
-                  Write-Host "Uploading $relativePath to Nexus"
-                  & "C:\Windows\System32\curl.exe" -v -u "$env:NEXUS_USERNAME:$env:NEXUS_PASSWORD" `
-                      --upload-file $_.FullName `
-                      "$env:NEXUS_URL/frontend/$relativePath"
-              }
-              cd ../../
+          $serverBuildPath = "server/build"
+          $serverZip = "server.zip"
+          if (-Not (Test-Path $serverBuildPath)) {
+            Write-Host "Server build folder not found. Skipping upload."
           } else {
-              Write-Host "Frontend dist folder not found, skipping frontend upload."
+            if (Test-Path $serverZip) { Remove-Item $serverZip }
+            Compress-Archive -Path "$serverBuildPath/*" -DestinationPath $serverZip
+            Write-Host "Uploading $serverZip to Nexus"
+            & "C:\Windows\System32\curl.exe" -v -u "$env:NEXUS_USERNAME:$env:NEXUS_PASSWORD" `
+              --upload-file $serverZip `
+              "$env:NEXUS_URL/server/$serverZip"
           }
-
-          Write-Host "📦 Uploading server build files..."
-          if (Test-Path server/build) {
-              cd server/build
-              Get-ChildItem -Recurse -File | ForEach-Object {
-                  $relativePath = $_.FullName.Substring($PWD.Path.Length + 1).Replace("\","/")
-                  Write-Host "Uploading $relativePath to Nexus"
-                  & "C:\Windows\System32\curl.exe" -v -u "$env:NEXUS_USERNAME:$env:NEXUS_PASSWORD" `
-                      --upload-file $_.FullName `
-                      "$env:NEXUS_URL/server/$relativePath"
-              }
-              cd ../..
-          } else {
-              Write-Host "Server build folder not found, skipping server upload."
-          }
-        env:
-          NEXUS_URL: ${{ secrets.NEXUS_URL }}
-          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
-          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
