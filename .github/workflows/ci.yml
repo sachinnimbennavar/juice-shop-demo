@@ -75,23 +75,24 @@ jobs:
               echo "sonar-scanner not found, skipping SonarQube analysis."
           }
 
-      # 🔹 Nexus upload phase
+      # 🔹 Nexus upload phase (PowerShell compatible)
       - name: Nexus Upload
         if: always()
+        shell: pwsh
         env:
           NEXUS_URL: ${{ secrets.NEXUS_URL }}
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
-          echo "Preparing artifacts for Nexus upload..."
-          mkdir -p temp_artifacts
-          cp -r frontend/dist temp_artifacts/frontend
-          cp -r server/build temp_artifacts/server
-          zip -r juice-shop-build.zip temp_artifacts/*
+          Write-Host "Preparing artifacts for Nexus upload..."
+          mkdir temp_artifacts
+          Copy-Item -Recurse frontend/dist temp_artifacts/frontend
+          Copy-Item -Recurse server/build temp_artifacts/server
+          Compress-Archive -Path temp_artifacts/* -DestinationPath juice-shop-build.zip
 
-          echo "Uploading artifact to Nexus..."
-          curl -v -u $NEXUS_USERNAME:$NEXUS_PASSWORD \
-            --upload-file juice-shop-build.zip \
-            $NEXUS_URL/juice-shop-build-${GITHUB_RUN_NUMBER}.zip
+          Write-Host "Uploading artifact to Nexus..."
+          curl -v -u "${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}" `
+            --upload-file "juice-shop-build.zip" `
+            "${env:NEXUS_URL}/juice-shop-build-${env:GITHUB_RUN_NUMBER}.zip"
 
-          echo "Nexus upload completed."
+          Write-Host "Nexus upload completed."
