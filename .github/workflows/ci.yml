@@ -75,32 +75,23 @@ jobs:
               echo "sonar-scanner not found, skipping SonarQube analysis."
           }
 
-      # 🔟 Upload build artifacts to Nexus (direct files, no zipping)
+      # 🔟 Optimized Nexus Upload (Zipped Artifacts)
       - name: Upload build artifacts to Nexus
         env:
           NEXUS_URL: ${{ secrets.NEXUS_URL }}
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
-        shell: powershell
         run: |
-          # Upload Angular frontend dist files
-          cd frontend/dist
-          foreach ($file in Get-ChildItem -Recurse -File) {
-              $relativePath = $file.FullName.Substring($PWD.Path.Length + 1).Replace("\","/")
-              Write-Host "Uploading $relativePath"
-              & "C:\Windows\System32\curl.exe" -v -u "$env:NEXUS_USERNAME:$env:NEXUS_PASSWORD" `
-                --upload-file $file.FullName `
-                "$env:NEXUS_URL/frontend/$relativePath"
-          }
-          cd ../../..
+          Write-Host "📦 Compressing and uploading frontend build..."
+          Compress-Archive -Path frontend/dist/* -DestinationPath frontend.zip
+          & "C:\Windows\System32\curl.exe" -v -u "$env:NEXUS_USERNAME:$env:NEXUS_PASSWORD" `
+            --upload-file frontend.zip `
+            "$env:NEXUS_URL/frontend/frontend.zip"
 
-          # Upload server build files
-          cd server/build
-          foreach ($file in Get-ChildItem -Recurse -File) {
-              $relativePath = $file.FullName.Substring($PWD.Path.Length + 1).Replace("\","/")
-              Write-Host "Uploading $relativePath"
-              & "C:\Windows\System32\curl.exe" -v -u "$env:NEXUS_USERNAME:$env:NEXUS_PASSWORD" `
-                --upload-file $file.FullName `
-                "$env:NEXUS_URL/server/$relativePath"
-          }
-          cd ../..
+          Write-Host "📦 Compressing and uploading server build..."
+          Compress-Archive -Path server/build/* -DestinationPath server.zip
+          & "C:\Windows\System32\curl.exe" -v -u "$env:NEXUS_USERNAME:$env:NEXUS_PASSWORD" `
+            --upload-file server.zip `
+            "$env:NEXUS_URL/server/server.zip"
+
+          Write-Host "✅ Uploads completed successfully."
