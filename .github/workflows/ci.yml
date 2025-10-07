@@ -15,81 +15,66 @@ jobs:
     steps:
       # 1️⃣ Checkout the repository
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      # 2️⃣ Set Node memory for server build
-      - name: Set Node memory
-        run: set NODE_OPTIONS=--max_old_space_size=4096
-
-      # 3️⃣ Cache frontend dependencies and Angular build output
-      - name: Cache frontend
-        uses: actions/cache@v3
+      # 2️⃣ Set up Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          path: |
-            frontend/node_modules
-            frontend/dist
-            frontend/.angular
-          key: ${{ runner.os }}-frontend-${{ hashFiles('frontend/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-frontend-
+          node-version: '20'
 
-      # 4️⃣ Cache server dependencies
-      - name: Cache server
-        uses: actions/cache@v3
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-server-${{ hashFiles('package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-server-
-
-      # 5️⃣ Install frontend dependencies
+      # 3️⃣ Install dependencies for frontend
       - name: Install frontend dependencies
-        run: |
-          cd frontend
-          npm install --legacy-peer-deps --prefer-offline --no-audit
-          cd ..
+        working-directory: frontend
+        run: npm ci
 
-      # 6️⃣ Build frontend (Angular incremental build handled automatically)
+      # 4️⃣ Build frontend
       - name: Build frontend
-        run: |
-          cd frontend
-          npm run build -- --configuration production --watch=false --verbose
-          cd ..
+        working-directory: frontend
+        run: npm run build
 
-      # 7️⃣ Install server dependencies
+      # 5️⃣ Install dependencies for server
       - name: Install server dependencies
-        run: npm install --prefer-offline --no-audit
+        working-directory: server
+        run: npm ci
 
-      # 8️⃣ Build server
+      # 6️⃣ Run server build
       - name: Build server
-        run: npm run build:server
+        working-directory: server
+        run: npm run build
 
-      # 9️⃣ Optional SonarQube analysis (safe skip if not installed)
-      - name: SonarQube Scan
+      # 7️⃣ Run SonarQube analysis
+      - name: SonarQube Analysis
+        env:
+          SONAR_SCANNER_PATH: C:\Users\sachin.nimbennavar\Downloads\sonar-scanner-cli-7.2.0.5079-windows-x64\sonar-scanner-7.2.0.5079-windows-x64\bin
         run: |
-          if (Get-Command sonar-scanner -ErrorAction SilentlyContinue) {
-              echo "Running SonarQube scanner..."
-              set SONAR_HOST_URL=http://127.0.0.1:9000
-              sonar-scanner
-          } else {
-              echo "sonar-scanner not found, skipping SonarQube analysis."
-          }
+          echo "Running SonarQube analysis..."
+          & "${env:SONAR_SCANNER_PATH}\sonar-scanner.bat" `
+            -D"sonar.projectKey=juice-shop-demo" `
+            -D"sonar.sources=." `
+            -D"sonar.host.url=http://localhost:9000" `
+            -D"sonar.login=${{ secrets.SONAR_TOKEN }}"
 
-      # 🔟 Nexus Upload Phase
-      - name: Upload Artifact to Nexus
-        shell: pwsh
+      # 8️⃣ Nexus Upload Phase
+      - name: Nexus Upload Phase
+        if: ${{ always() }}
+        shell: powershell
+        env:
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+          NEXUS_URL: ${{ secrets.NEXUS_URL }}
         run: |
           Write-Host "Preparing artifacts for Nexus upload..."
           mkdir temp_artifacts -ErrorAction SilentlyContinue
-
+          
           # Ensure build folders exist (create empty if missing)
           if (!(Test-Path server/build)) { mkdir server/build | Out-Null }
           if (!(Test-Path frontend/dist)) { mkdir frontend/dist | Out-Null }
-
+          
           # Copy safely
           Copy-Item -Recurse frontend/dist temp_artifacts/frontend -ErrorAction SilentlyContinue
           Copy-Item -Recurse server/build temp_artifacts/server -ErrorAction SilentlyContinue
-
+          
           # Compress only if something exists
           if ((Get-ChildItem temp_artifacts | Measure-Object).Count -gt 0) {
             Compress-Archive -Path temp_artifacts/* -DestinationPath juice-shop-build.zip -Force
