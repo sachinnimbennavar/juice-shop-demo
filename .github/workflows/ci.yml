@@ -7,65 +7,91 @@ on:
   pull_request:
     branches:
       - main
-  workflow_dispatch:
-    inputs:
-      nexus_only:
-        description: 'Run only Nexus upload phase'
-        required: false
-        default: 'false'
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: self-hosted
+
     steps:
-      - name: Checkout code
+      # 1️⃣ Checkout the repository
+      - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v3
+      # 2️⃣ Set Node memory for server build
+      - name: Set Node memory
+        run: set NODE_OPTIONS=--max_old_space_size=4096
+
+      # 3️⃣ Cache frontend dependencies and Angular build output
+      - name: Cache frontend
+        uses: actions/cache@v3
         with:
-          node-version: '18'
+          path: |
+            frontend/node_modules
+            frontend/dist
+            frontend/.angular
+          key: ${{ runner.os }}-frontend-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-frontend-
 
-      - name: Install dependencies
-        run: npm ci
+      # 4️⃣ Cache server dependencies
+      - name: Cache server
+        uses: actions/cache@v3
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-server-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-server-
 
+      # 5️⃣ Install frontend dependencies
+      - name: Install frontend dependencies
+        run: |
+          cd frontend
+          npm install --legacy-peer-deps --prefer-offline --no-audit
+          cd ..
+
+      # 6️⃣ Build frontend (Angular incremental build handled automatically)
       - name: Build frontend
-        run: npm run build:frontend
+        run: |
+          cd frontend
+          npm run build -- --configuration production --watch=false --verbose
+          cd ..
 
+      # 7️⃣ Install server dependencies
+      - name: Install server dependencies
+        run: npm install --prefer-offline --no-audit
+
+      # 8️⃣ Build server
       - name: Build server
         run: npm run build:server
 
-      - name: Run SonarQube Analysis
-        if: ${{ inputs.nexus_only != 'true' }}
+      # 9️⃣ Optional SonarQube analysis (safe skip if not installed)
+      - name: SonarQube Scan
         run: |
-          echo "Running SonarQube analysis..."
-          # Example SonarQube scanner command
-          "C:\Users\sachin.nimbennavar\Downloads\sonar-scanner-cli-7.2.0.5079-windows-x64\sonar-scanner-7.2.0.5079-windows-x64\bin\sonar-scanner.bat" `
-            -Dsonar.projectKey=juice-shop-demo `
-            -Dsonar.sources=. `
-            -Dsonar.host.url=http://localhost:9000 `
-            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
+          if (Get-Command sonar-scanner -ErrorAction SilentlyContinue) {
+              echo "Running SonarQube scanner..."
+              set SONAR_HOST_URL=http://127.0.0.1:9000
+              sonar-scanner
+          } else {
+              echo "sonar-scanner not found, skipping SonarQube analysis."
+          }
 
-  nexus_upload:
-    runs-on: windows-latest
-    needs: build
-    if: ${{ inputs.nexus_only == 'true' || github.event_name != 'workflow_dispatch' }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Upload frontend and server builds to Nexus
+      # 🔹 Nexus upload phase
+      - name: Nexus Upload
+        if: always()
+        env:
+          NEXUS_URL: ${{ secrets.NEXUS_URL }}
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
-          Write-Host "Uploading frontend build to Nexus..."
-          $frontendCred = New-Object System.Management.Automation.PSCredential("${{ secrets.NEXUS_USERNAME }}", (ConvertTo-SecureString "${{ secrets.NEXUS_PASSWORD }}" -AsPlainText -Force))
-          Invoke-WebRequest -Uri "${{ secrets.NEXUS_URL }}/frontend.zip" `
-            -Method Put `
-            -InFile "frontend/dist/frontend.zip" `
-            -Credential $frontendCred
+          echo "Preparing artifacts for Nexus upload..."
+          mkdir -p temp_artifacts
+          cp -r frontend/dist temp_artifacts/frontend
+          cp -r server/build temp_artifacts/server
+          zip -r juice-shop-build.zip temp_artifacts/*
 
-          Write-Host "Uploading server build to Nexus..."
-          $serverCred = New-Object System.Management.Automation.PSCredential("${{ secrets.NEXUS_USERNAME }}", (ConvertTo-SecureString "${{ secrets.NEXUS_PASSWORD }}" -AsPlainText -Force))
-          Invoke-WebRequest -Uri "${{ secrets.NEXUS_URL }}/server.zip" `
-            -Method Put `
-            -InFile "server/build/server.zip" `
-            -Credential $serverCred
+          echo "Uploading artifact to Nexus..."
+          curl -v -u $NEXUS_USERNAME:$NEXUS_PASSWORD \
+            --upload-file juice-shop-build.zip \
+            $NEXUS_URL/juice-shop-build-${GITHUB_RUN_NUMBER}.zip
+
+          echo "Nexus upload completed."
