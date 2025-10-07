@@ -11,87 +11,73 @@ on:
 jobs:
   build:
     runs-on: self-hosted
-
     steps:
-      # 1️⃣ Checkout the repository
+      # Step 1: Checkout code
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2️⃣ Set Node memory for server build
-      - name: Set Node memory
-        run: set NODE_OPTIONS=--max_old_space_size=4096
-
-      # 3️⃣ Cache frontend dependencies and Angular build output
-      - name: Cache frontend
-        uses: actions/cache@v3
+      # Step 2: Set up Node.js
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
         with:
-          path: |
-            frontend/node_modules
-            frontend/dist
-            frontend/.angular
-          key: ${{ runner.os }}-frontend-${{ hashFiles('frontend/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-frontend-
+          node-version: '18'
 
-      # 4️⃣ Cache server dependencies
-      - name: Cache server
-        uses: actions/cache@v3
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-server-${{ hashFiles('package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-server-
+      # Step 3: Install dependencies
+      - name: Install dependencies
+        run: npm ci
 
-      # 5️⃣ Install frontend dependencies
-      - name: Install frontend dependencies
+      # Step 4: Build frontend
+      - name: Build Angular frontend
         run: |
-          cd frontend
-          npm install --legacy-peer-deps --prefer-offline --no-audit
-          cd ..
+          set NODE_OPTIONS=--max_old_space_size=4096
+          npx ng build --configuration production --source-map=false
 
-      # 6️⃣ Build frontend (Angular incremental build handled automatically)
-      - name: Build frontend
-        run: |
-          cd frontend
-          npm run build -- --configuration production --watch=false --verbose
-          cd ..
-
-      # 7️⃣ Install server dependencies
-      - name: Install server dependencies
-        run: npm install --prefer-offline --no-audit
-
-      # 8️⃣ Build server
+      # Step 5: Build server (if any server build exists)
       - name: Build server
-        run: npm run build:server
-
-      # 9️⃣ Optional SonarQube analysis (safe skip if not installed)
-      - name: SonarQube Scan
         run: |
-          if (Get-Command sonar-scanner -ErrorAction SilentlyContinue) {
-              echo "Running SonarQube scanner..."
-              set SONAR_HOST_URL=http://127.0.0.1:9000
-              sonar-scanner
+          cd server
+          npm install
+          npm run build
+          cd ..
+
+      # Step 6: Run tests
+      - name: Run tests
+        run: npm test
+
+      # Step 7: Upload builds to Nexus (robust)
+      - name: Upload builds to Nexus
+        shell: powershell
+        run: |
+          Write-Host "📦 Uploading frontend build files..."
+          if (Test-Path frontend/dist) {
+              cd frontend/dist
+              Get-ChildItem -Recurse -File | ForEach-Object {
+                  $relativePath = $_.FullName.Substring($PWD.Path.Length + 1).Replace("\","/")
+                  Write-Host "Uploading $relativePath to Nexus"
+                  & "C:\Windows\System32\curl.exe" -v -u "$env:NEXUS_USERNAME:$env:NEXUS_PASSWORD" `
+                      --upload-file $_.FullName `
+                      "$env:NEXUS_URL/frontend/$relativePath"
+              }
+              cd ../../
           } else {
-              echo "sonar-scanner not found, skipping SonarQube analysis."
+              Write-Host "Frontend dist folder not found, skipping frontend upload."
           }
 
-      # 🔟 Optimized Nexus Upload (Zipped Artifacts)
-      - name: Upload build artifacts to Nexus
+          Write-Host "📦 Uploading server build files..."
+          if (Test-Path server/build) {
+              cd server/build
+              Get-ChildItem -Recurse -File | ForEach-Object {
+                  $relativePath = $_.FullName.Substring($PWD.Path.Length + 1).Replace("\","/")
+                  Write-Host "Uploading $relativePath to Nexus"
+                  & "C:\Windows\System32\curl.exe" -v -u "$env:NEXUS_USERNAME:$env:NEXUS_PASSWORD" `
+                      --upload-file $_.FullName `
+                      "$env:NEXUS_URL/server/$relativePath"
+              }
+              cd ../..
+          } else {
+              Write-Host "Server build folder not found, skipping server upload."
+          }
         env:
           NEXUS_URL: ${{ secrets.NEXUS_URL }}
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
-        run: |
-          Write-Host "📦 Compressing and uploading frontend build..."
-          Compress-Archive -Path frontend/dist/* -DestinationPath frontend.zip
-          & "C:\Windows\System32\curl.exe" -v -u "$env:NEXUS_USERNAME:$env:NEXUS_PASSWORD" `
-            --upload-file frontend.zip `
-            "$env:NEXUS_URL/frontend/frontend.zip"
-
-          Write-Host "📦 Compressing and uploading server build..."
-          Compress-Archive -Path server/build/* -DestinationPath server.zip
-          & "C:\Windows\System32\curl.exe" -v -u "$env:NEXUS_USERNAME:$env:NEXUS_PASSWORD" `
-            --upload-file server.zip `
-            "$env:NEXUS_URL/server/server.zip"
-
-          Write-Host "✅ Uploads completed successfully."
