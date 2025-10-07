@@ -81,13 +81,14 @@ jobs:
           NEXUS_URL: ${{ secrets.NEXUS_URL }}
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+        shell: powershell
         run: |
           # Upload Angular frontend dist files
           cd frontend/dist
           foreach ($file in Get-ChildItem -Recurse -File) {
               $relativePath = $file.FullName.Substring($PWD.Path.Length + 1).Replace("\","/")
               Write-Host "Uploading $relativePath"
-              curl -v -u "$env:NEXUS_USERNAME:$env:NEXUS_PASSWORD" `
+              & "C:\Windows\System32\curl.exe" -v -u "$env:NEXUS_USERNAME:$env:NEXUS_PASSWORD" `
                 --upload-file $file.FullName `
                 "$env:NEXUS_URL/frontend/$relativePath"
           }
@@ -98,7 +99,7 @@ jobs:
           foreach ($file in Get-ChildItem -Recurse -File) {
               $relativePath = $file.FullName.Substring($PWD.Path.Length + 1).Replace("\","/")
               Write-Host "Uploading $relativePath"
-              curl -v -u "$env:NEXUS_USERNAME:$env:NEXUS_PASSWORD" `
+              & "C:\Windows\System32\curl.exe" -v -u "$env:NEXUS_USERNAME:$env:NEXUS_PASSWORD" `
                 --upload-file $file.FullName `
                 "$env:NEXUS_URL/server/$relativePath"
           }
