@@ -49,7 +49,7 @@ jobs:
           npm install --legacy-peer-deps --prefer-offline --no-audit
           cd ..
 
-      # 6️⃣ Build frontend (Angular incremental build handled automatically)
+      # 6️⃣ Build frontend
       - name: Build frontend
         run: |
           cd frontend
@@ -64,7 +64,7 @@ jobs:
       - name: Build server
         run: npm run build:server
 
-      # 9️⃣ Optional SonarQube analysis (safe skip if not installed)
+      # 9️⃣ Optional SonarQube analysis
       - name: SonarQube Scan
         run: |
           if (Get-Command sonar-scanner -ErrorAction SilentlyContinue) {
@@ -75,7 +75,7 @@ jobs:
               echo "sonar-scanner not found, skipping SonarQube analysis."
           }
 
-      # 🔹 Nexus upload phase (Windows PowerShell)
+      # 🔹 Nexus upload phase (safe & consistent)
       - name: Nexus Upload
         if: always()
         shell: powershell
@@ -84,15 +84,20 @@ jobs:
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
-          Write-Host "Preparing artifacts for Nexus upload..."
-          mkdir temp_artifacts
-          Copy-Item -Recurse frontend/dist temp_artifacts/frontend
+          mkdir temp_artifacts -ErrorAction SilentlyContinue
+
+          # Copy frontend dist if exists
+          if (Test-Path frontend/dist) { Copy-Item -Recurse frontend/dist temp_artifacts/frontend }
+
+          # Ensure server/build exists
+          if (-not (Test-Path server/build)) { mkdir server/build }
+
+          # Copy server build
           Copy-Item -Recurse server/build temp_artifacts/server
-          Compress-Archive -Path temp_artifacts/* -DestinationPath juice-shop-build.zip
 
-          Write-Host "Uploading artifact to Nexus..."
-          curl -v -u "${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}" `
-            --upload-file "juice-shop-build.zip" `
-            "${env:NEXUS_URL}/juice-shop-build-${env:GITHUB_RUN_NUMBER}.zip"
-
-          Write-Host "Nexus upload completed."
+          # Only compress and upload if temp_artifacts has content
+          if ((Get-ChildItem temp_artifacts | Measure-Object).Count -gt 0) {
+              Compress-Archive -Path temp_artifacts/* -DestinationPath juice-shop-build.zip
+              curl -v -u "${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}" `
+                --upload-file "juice-shop-build.zip" `
+                "${env:NEXUS_URL}/juice-shop-build-${env:GITHUB_RUN_NUMBER}.zip"
