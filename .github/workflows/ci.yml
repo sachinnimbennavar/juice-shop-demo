@@ -75,10 +75,10 @@ jobs:
               echo "sonar-scanner not found, skipping SonarQube analysis."
           }
 
-      # 🔹 Nexus upload phase (PowerShell compatible)
+      # 🔹 Nexus upload phase (Windows PowerShell)
       - name: Nexus Upload
         if: always()
-        shell: pwsh
+        shell: powershell
         env:
           NEXUS_URL: ${{ secrets.NEXUS_URL }}
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
