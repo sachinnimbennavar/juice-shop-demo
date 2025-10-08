@@ -64,8 +64,19 @@ jobs:
       - name: Build server
         run: npm run build:server
 
-      # 🔟 Nexus Upload Phase (PowerShell-native)
-      - name: Upload frontend & server builds to Nexus
+      # 9️⃣ Optional SonarQube analysis (safe skip if not installed)
+      - name: SonarQube Scan
+        run: |
+          if (Get-Command sonar-scanner -ErrorAction SilentlyContinue) {
+              echo "Running SonarQube scanner..."
+              set SONAR_HOST_URL=http://127.0.0.1:9000
+              sonar-scanner
+          } else {
+              echo "sonar-scanner not found, skipping SonarQube analysis."
+          }
+
+      # 🔟 Nexus Upload Phase (PowerShell-native, updated only here)
+      - name: Upload build artifacts to Nexus
         shell: powershell
         env:
           NEXUS_URL: ${{ secrets.NEXUS_URL }}
@@ -73,34 +84,41 @@ jobs:
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
           Write-Host "Preparing separate zips for frontend and server..."
+          
+          # 🧩 Create Frontend Zip
+          if (Test-Path "frontend/dist") {
+              Write-Host "Creating frontend-build.zip..."
+              Compress-Archive -Path "frontend/dist/*" -DestinationPath "frontend-build.zip" -Force
+          } else {
+              Write-Host "⚠️ Frontend dist not found, skipping frontend zip."
+          }
 
-          # Ensure build folders exist
-          if (!(Test-Path frontend/dist)) { mkdir frontend/dist | Out-Null }
-          if (!(Test-Path server/build)) { mkdir server/build | Out-Null }
+          # 🧩 Create Server Zip (source instead of empty build)
+          if (Test-Path "server") {
+              Write-Host "Creating server-build.zip..."
+              Compress-Archive -Path "server/*" -DestinationPath "server-build.zip" -Force
+          } else {
+              Write-Host "⚠️ Server folder not found, skipping server zip."
+          }
 
-          # Create zips individually
-          Write-Host "Creating frontend-build.zip..."
-          Compress-Archive -Path "frontend/dist" -DestinationPath "frontend-build.zip" -Force
-
-          Write-Host "Creating server-build.zip..."
-          Compress-Archive -Path "server" -DestinationPath "server-build.zip" -Force
-
-          # Prepare authentication header
+          # 🧩 Upload to Nexus
+          Write-Host "Uploading frontend-build.zip to Nexus..."
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
 
-          # Upload frontend zip
-          Write-Host "Uploading frontend-build.zip to Nexus..."
-          Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/juice-shop/frontend-build.zip" `
-                            -Method Put `
-                            -InFile "frontend-build.zip" `
-                            -Headers $headers
+          if (Test-Path "frontend-build.zip") {
+              Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/juice-shop/frontend-build-${env:GITHUB_RUN_NUMBER}.zip" `
+                                -Method Put `
+                                -InFile "frontend-build.zip" `
+                                -Headers $headers
+          }
 
-          # Upload server zip
-          Write-Host "Uploading server-build.zip to Nexus..."
-          Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/juice-shop/server-build.zip" `
-                            -Method Put `
-                            -InFile "server-build.zip" `
-                            -Headers $headers
+          if (Test-Path "server-build.zip") {
+              Write-Host "Uploading server-build.zip to Nexus..."
+              Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/juice-shop/server-build-${env:GITHUB_RUN_NUMBER}.zip" `
+                                -Method Put `
+                                -InFile "server-build.zip" `
+                                -Headers $headers
+          }
 
           Write-Host "✅ Both frontend and server builds uploaded successfully to Nexus."
