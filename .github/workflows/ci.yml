@@ -7,6 +7,12 @@ on:
   pull_request:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      nexus_only:
+        description: 'Run only Nexus phase'
+        required: false
+        default: 'false'
 
 jobs:
   build:
@@ -15,14 +21,17 @@ jobs:
     steps:
       # 1️⃣ Checkout the repository
       - name: Checkout repository
+        if: ${{ github.event.inputs.nexus_only != 'true' }}
         uses: actions/checkout@v3
 
       # 2️⃣ Set Node memory for server build
       - name: Set Node memory
+        if: ${{ github.event.inputs.nexus_only != 'true' }}
         run: set NODE_OPTIONS=--max_old_space_size=4096
 
       # 3️⃣ Cache frontend dependencies and Angular build output
       - name: Cache frontend
+        if: ${{ github.event.inputs.nexus_only != 'true' }}
         uses: actions/cache@v3
         with:
           path: |
@@ -35,6 +44,7 @@ jobs:
 
       # 4️⃣ Cache server dependencies
       - name: Cache server
+        if: ${{ github.event.inputs.nexus_only != 'true' }}
         uses: actions/cache@v3
         with:
           path: node_modules
@@ -44,13 +54,15 @@ jobs:
 
       # 5️⃣ Install frontend dependencies
       - name: Install frontend dependencies
+        if: ${{ github.event.inputs.nexus_only != 'true' }}
         run: |
           cd frontend
           npm install --legacy-peer-deps --prefer-offline --no-audit
           cd ..
 
-      # 6️⃣ Build frontend (Angular incremental build handled automatically)
+      # 6️⃣ Build frontend
       - name: Build frontend
+        if: ${{ github.event.inputs.nexus_only != 'true' }}
         run: |
           cd frontend
           npm run build -- --configuration production --watch=false --verbose
@@ -58,14 +70,17 @@ jobs:
 
       # 7️⃣ Install server dependencies
       - name: Install server dependencies
+        if: ${{ github.event.inputs.nexus_only != 'true' }}
         run: npm install --prefer-offline --no-audit
 
       # 8️⃣ Build server
       - name: Build server
+        if: ${{ github.event.inputs.nexus_only != 'true' }}
         run: npm run build:server
 
-      # 9️⃣ Optional SonarQube analysis (safe skip if not installed)
+      # 9️⃣ Optional SonarQube analysis
       - name: SonarQube Scan
+        if: ${{ github.event.inputs.nexus_only != 'true' }}
         run: |
           if (Get-Command sonar-scanner -ErrorAction SilentlyContinue) {
               echo "Running SonarQube scanner..."
@@ -75,7 +90,7 @@ jobs:
               echo "sonar-scanner not found, skipping SonarQube analysis."
           }
 
-      # 🔟 Nexus Upload Phase (PowerShell-native)
+      # 🔟 Nexus Upload Phase (always runs)
       - name: Upload build artifacts to Nexus
         shell: powershell
         env:
@@ -84,28 +99,26 @@ jobs:
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
           Write-Host "Preparing artifacts for Nexus upload..."
+
+          # Create temp folder
           mkdir temp_artifacts -ErrorAction SilentlyContinue
-          
-          # Ensure build folders exist (create empty if missing)
-          if (!(Test-Path server/build)) { mkdir server/build | Out-Null }
+
+          # Ensure frontend and server folders exist
           if (!(Test-Path frontend/dist)) { mkdir frontend/dist | Out-Null }
-          
-          # Copy safely
+          if (!(Test-Path server/build)) { mkdir server/build | Out-Null }
+
+          # Copy frontend and server build safely
           Copy-Item -Recurse frontend/dist temp_artifacts/frontend -ErrorAction SilentlyContinue
           Copy-Item -Recurse server/build temp_artifacts/server -ErrorAction SilentlyContinue
-          
-          # Compress only if something exists
-          if ((Get-ChildItem temp_artifacts | Measure-Object).Count -gt 0) {
-              Compress-Archive -Path temp_artifacts/* -DestinationPath juice-shop-build.zip -Force
-              Write-Host "Uploading artifact to Nexus using Invoke-RestMethod..."
-              
-              $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
-              $headers = @{ Authorization = "Basic $base64Auth" }
-              Invoke-RestMethod -Uri "${env:NEXUS_URL}/juice-shop-build-${env:GITHUB_RUN_NUMBER}.zip" `
-                                -Method Put `
-                                -InFile "juice-shop-build.zip" `
-                                -Headers $headers
-              Write-Host "Nexus upload completed successfully."
-          } else {
-              Write-Host "No artifacts found, but marking Nexus phase as successful."
-          }
+
+          # Compress all artifacts
+          Compress-Archive -Path temp_artifacts/* -DestinationPath juice-shop-build.zip -Force
+
+          Write-Host "Uploading artifact to Nexus..."
+          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
+          $headers = @{ Authorization = "Basic $base64Auth" }
+          Invoke-RestMethod -Uri "${env:NEXUS_URL}/juice-shop-build-${env:GITHUB_RUN_NUMBER}.zip" `
+                            -Method Put `
+                            -InFile "juice-shop-build.zip" `
+                            -Headers $headers
+          Write-Host "Nexus upload completed successfully."
