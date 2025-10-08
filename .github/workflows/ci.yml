@@ -1,81 +1,18 @@
-name: Juice Shop CI
+name: Nexus Upload Test
 
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
+  workflow_dispatch:  # run manually for testing
 
 jobs:
-  build:
+  nexus-upload:
     runs-on: self-hosted
 
     steps:
-      # 1️⃣ Checkout the repository
+      # 1️⃣ Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2️⃣ Set Node memory for server build
-      - name: Set Node memory
-        run: set NODE_OPTIONS=--max_old_space_size=4096
-
-      # 3️⃣ Cache frontend dependencies and Angular build output
-      - name: Cache frontend
-        uses: actions/cache@v3
-        with:
-          path: |
-            frontend/node_modules
-            frontend/dist
-            frontend/.angular
-          key: ${{ runner.os }}-frontend-${{ hashFiles('frontend/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-frontend-
-
-      # 4️⃣ Cache server dependencies
-      - name: Cache server
-        uses: actions/cache@v3
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-server-${{ hashFiles('package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-server-
-
-      # 5️⃣ Install frontend dependencies
-      - name: Install frontend dependencies
-        run: |
-          cd frontend
-          npm install --legacy-peer-deps --prefer-offline --no-audit
-          cd ..
-
-      # 6️⃣ Build frontend (Angular incremental build handled automatically)
-      - name: Build frontend
-        run: |
-          cd frontend
-          npm run build -- --configuration production --watch=false --verbose
-          cd ..
-
-      # 7️⃣ Install server dependencies
-      - name: Install server dependencies
-        run: npm install --prefer-offline --no-audit
-
-      # 8️⃣ Build server
-      - name: Build server
-        run: npm run build:server
-
-      # 9️⃣ Optional SonarQube analysis (safe skip if not installed)
-      - name: SonarQube Scan
-        run: |
-          if (Get-Command sonar-scanner -ErrorAction SilentlyContinue) {
-              echo "Running SonarQube scanner..."
-              set SONAR_HOST_URL=http://127.0.0.1:9000
-              sonar-scanner
-          } else {
-              echo "sonar-scanner not found, skipping SonarQube analysis."
-          }
-
-      # 🔟 Nexus Upload Phase (PowerShell-native, updated only here)
+      # 2️⃣ Nexus Upload Phase (main focus)
       - name: Upload build artifacts to Nexus
         shell: powershell
         env:
@@ -83,30 +20,46 @@ jobs:
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
-          Write-Host "Preparing separate zips for frontend and server..."
-          
-          # 🧩 Create Frontend Zip
+          Write-Host "🧩 Preparing zips for Nexus upload test..."
+
+          # Create frontend zip if folder exists
           if (Test-Path "frontend/dist") {
               Write-Host "Creating frontend-build.zip..."
               Compress-Archive -Path "frontend/dist/*" -DestinationPath "frontend-build.zip" -Force
           } else {
-              Write-Host "⚠️ Frontend dist not found, skipping frontend zip."
+              Write-Host "⚠️ frontend/dist not found, skipping frontend zip."
           }
 
-          # 🧩 Create Server Zip (source instead of empty build)
-          if (Test-Path "server") {
-              Write-Host "Creating server-build.zip..."
-              Compress-Archive -Path "server/*" -DestinationPath "server-build.zip" -Force
+          # Create server zip (include real backend folders)
+          Write-Host "Creating server-build.zip..."
+          $serverPaths = @(
+              "app.ts",
+              "server.ts",
+              "package.json",
+              "tsconfig.json",
+              "models",
+              "routes",
+              "lib",
+              "data",
+              "views",
+              "rsn",
+              "config"
+          ) | Where-Object { Test-Path $_ }
+
+          if ($serverPaths.Count -gt 0) {
+              Compress-Archive -Path $serverPaths -DestinationPath "server-build.zip" -Force
+              Write-Host "✅ Server zip created successfully."
           } else {
-              Write-Host "⚠️ Server folder not found, skipping server zip."
+              Write-Host "⚠️ No backend files found to zip."
           }
 
-          # 🧩 Upload to Nexus
-          Write-Host "Uploading frontend-build.zip to Nexus..."
+          # Upload both to Nexus
+          Write-Host "⬆️ Uploading to Nexus..."
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
 
           if (Test-Path "frontend-build.zip") {
+              Write-Host "Uploading frontend-build.zip..."
               Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/juice-shop/frontend-build-${env:GITHUB_RUN_NUMBER}.zip" `
                                 -Method Put `
                                 -InFile "frontend-build.zip" `
@@ -114,11 +67,11 @@ jobs:
           }
 
           if (Test-Path "server-build.zip") {
-              Write-Host "Uploading server-build.zip to Nexus..."
+              Write-Host "Uploading server-build.zip..."
               Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/juice-shop/server-build-${env:GITHUB_RUN_NUMBER}.zip" `
                                 -Method Put `
                                 -InFile "server-build.zip" `
                                 -Headers $headers
           }
 
-          Write-Host "✅ Both frontend and server builds uploaded successfully to Nexus."
+          Write-Host "✅ Nexus upload test completed successfully."
