@@ -1,7 +1,7 @@
-name: Nexus Upload Test
+name: Nexus Upload Test Full
 
 on:
-  workflow_dispatch:  # run manually for testing
+  workflow_dispatch:  # manual trigger for testing
 
 jobs:
   nexus-upload:
@@ -12,7 +12,21 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2️⃣ Nexus Upload Phase (main focus)
+      # 2️⃣ Build Frontend
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm install --legacy-peer-deps --prefer-offline --no-audit
+          npm run build -- --configuration production --watch=false
+          cd ..
+
+      # 3️⃣ Build Server
+      - name: Build server
+        run: |
+          npm install --prefer-offline --no-audit
+          npm run build:server
+
+      # 4️⃣ Nexus Upload Phase
       - name: Upload build artifacts to Nexus
         shell: powershell
         env:
@@ -20,9 +34,9 @@ jobs:
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
-          Write-Host "🧩 Preparing zips for Nexus upload test..."
+          Write-Host "🧩 Preparing frontend and server zips..."
 
-          # Create frontend zip if folder exists
+          # Frontend zip
           if (Test-Path "frontend/dist") {
               Write-Host "Creating frontend-build.zip..."
               Compress-Archive -Path "frontend/dist/*" -DestinationPath "frontend-build.zip" -Force
@@ -30,7 +44,7 @@ jobs:
               Write-Host "⚠️ frontend/dist not found, skipping frontend zip."
           }
 
-          # Create server zip (include real backend folders)
+          # Server zip (source + compiled JS)
           Write-Host "Creating server-build.zip..."
           $serverPaths = @(
               "app.ts",
@@ -43,7 +57,8 @@ jobs:
               "data",
               "views",
               "rsn",
-              "config"
+              "config",
+              "build"  # compiled JS from tsc
           ) | Where-Object { Test-Path $_ }
 
           if ($serverPaths.Count -gt 0) {
@@ -53,8 +68,8 @@ jobs:
               Write-Host "⚠️ No backend files found to zip."
           }
 
-          # Upload both to Nexus
-          Write-Host "⬆️ Uploading to Nexus..."
+          # Upload to Nexus
+          Write-Host "⬆️ Uploading zips to Nexus..."
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
 
@@ -74,4 +89,4 @@ jobs:
                                 -Headers $headers
           }
 
-          Write-Host "✅ Nexus upload test completed successfully."
+          Write-Host "✅ Nexus upload completed successfully."
