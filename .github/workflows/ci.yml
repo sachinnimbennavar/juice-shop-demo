@@ -7,121 +7,80 @@ on:
   pull_request:
     branches:
       - main
-  workflow_dispatch:
-    inputs:
-      nexus_only:
-        description: 'Run only Nexus upload'
-        required: false
-        default: 'false'
 
 jobs:
   build:
     runs-on: self-hosted
 
     steps:
-      # 1️⃣ Checkout the repository (always required)
-      - name: Checkout repository
+      - name: Checkout Code
         uses: actions/checkout@v3
 
-      # 2️⃣ Set Node memory for server build
-      - name: Set Node memory
-        if: ${{ github.event.inputs.nexus_only != 'true' }}
-        run: set NODE_OPTIONS=--max_old_space_size=4096
-
-      # 3️⃣ Cache frontend dependencies and Angular build output
-      - name: Cache frontend
-        if: ${{ github.event.inputs.nexus_only != 'true' }}
-        uses: actions/cache@v3
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
         with:
-          path: |
-            frontend/node_modules
-            frontend/dist
-            frontend/.angular
-          key: ${{ runner.os }}-frontend-${{ hashFiles('frontend/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-frontend-
+          node-version: 18
 
-      # 4️⃣ Cache server dependencies
-      - name: Cache server
-        if: ${{ github.event.inputs.nexus_only != 'true' }}
-        uses: actions/cache@v3
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-server-${{ hashFiles('package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-server-
-
-      # 5️⃣ Install frontend dependencies
-      - name: Install frontend dependencies
-        if: ${{ github.event.inputs.nexus_only != 'true' }}
+      # 🧱 Frontend Build
+      - name: Build Frontend
         run: |
           cd frontend
-          npm install --legacy-peer-deps --prefer-offline --no-audit
-          cd ..
+          npm install
+          npm run build
+        shell: bash
 
-      # 6️⃣ Build frontend
-      - name: Build frontend
-        if: ${{ github.event.inputs.nexus_only != 'true' }}
+      # ⚙️ Backend Build
+      - name: Build Server
         run: |
-          cd frontend
-          npm run build -- --configuration production --watch=false --verbose
-          cd ..
+          cd server
+          npm install
+          npm run build
+        shell: bash
 
-      # 7️⃣ Install server dependencies
-      - name: Install server dependencies
-        if: ${{ github.event.inputs.nexus_only != 'true' }}
-        run: npm install --prefer-offline --no-audit
-
-      # 8️⃣ Build server
-      - name: Build server
-        if: ${{ github.event.inputs.nexus_only != 'true' }}
-        run: npm run build:server
-
-      # 9️⃣ SonarQube Scan (optional)
+      # 🔍 SonarQube Analysis (keep your existing configuration)
       - name: SonarQube Scan
-        if: ${{ github.event.inputs.nexus_only != 'true' }}
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: |
-          if (Get-Command sonar-scanner -ErrorAction SilentlyContinue) {
-              echo "Running SonarQube scanner..."
-              set SONAR_HOST_URL=http://127.0.0.1:9000
-              sonar-scanner
-          } else {
-              echo "sonar-scanner not found, skipping SonarQube analysis."
-          }
+          sonar-scanner \
+            -Dsonar.projectKey=juice-shop \
+            -Dsonar.sources=. \
+            -Dsonar.host.url=http://localhost:9000 \
+            -Dsonar.login=$SONAR_TOKEN
+        shell: bash
 
-      # 🔟 Nexus Upload Phase (always runs)
-      - name: Upload build artifacts to Nexus
-        shell: powershell
+      # 📦 Nexus Upload Phase
+      - name: Zip Frontend Build
+        run: |
+          cd frontend/dist
+          zip -r ../../frontend-build.zip .
+        shell: bash
+
+      - name: Upload Frontend to Nexus
         env:
           NEXUS_URL: ${{ secrets.NEXUS_URL }}
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
-          Write-Host "Preparing artifacts for Nexus upload..."
-          mkdir temp_artifacts -ErrorAction SilentlyContinue
+          curl -v -u $NEXUS_USERNAME:$NEXUS_PASSWORD \
+            --upload-file frontend-build.zip \
+            "$NEXUS_URL/repository/juice-shop/frontend-build.zip"
+        shell: bash
 
-          # Ensure build folders exist (create empty if missing)
-          if (!(Test-Path server/build)) { mkdir server/build | Out-Null }
-          if (!(Test-Path frontend/dist)) { mkdir frontend/dist | Out-Null }
+      # 🧩 Add Server Zip + Upload (NEW)
+      - name: Zip Server Build
+        run: |
+          cd server
+          zip -r ../server-build.zip .
+        shell: bash
 
-          # Copy frontend and server builds safely
-          Copy-Item -Recurse frontend/dist temp_artifacts/frontend -ErrorAction SilentlyContinue
-          Copy-Item -Recurse server/build temp_artifacts/server -ErrorAction SilentlyContinue
-
-          # Compress only if something exists
-          if ((Get-ChildItem temp_artifacts | Measure-Object).Count -gt 0) {
-              Compress-Archive -Path temp_artifacts/* -DestinationPath juice-shop-build.zip -Force
-              Write-Host "Uploading artifact to Nexus using Invoke-RestMethod..."
-
-              $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
-              $headers = @{ Authorization = "Basic $base64Auth" }
-
-              Invoke-RestMethod -Uri "${env:NEXUS_URL}/juice-shop-build-${env:GITHUB_RUN_NUMBER}.zip" `
-                                -Method Put `
-                                -InFile "juice-shop-build.zip" `
-                                -Headers $headers
-
-              Write-Host "Nexus upload completed successfully."
-          } else {
-              Write-Host "No artifacts found, but marking Nexus phase as successful."
-          }
+      - name: Upload Server to Nexus
+        env:
+          NEXUS_URL: ${{ secrets.NEXUS_URL }}
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+        run: |
+          curl -v -u $NEXUS_USERNAME:$NEXUS_PASSWORD \
+            --upload-file server-build.zip \
+            "$NEXUS_URL/repository/juice-shop/server-build.zip"
+        shell: bash
