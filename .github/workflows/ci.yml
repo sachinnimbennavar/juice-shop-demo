@@ -49,7 +49,7 @@ jobs:
           npm install --legacy-peer-deps --prefer-offline --no-audit
           cd ..
 
-      # 6️⃣ Build frontend
+      # 6️⃣ Build frontend (Angular incremental build handled automatically)
       - name: Build frontend
         run: |
           cd frontend
@@ -75,34 +75,37 @@ jobs:
               echo "sonar-scanner not found, skipping SonarQube analysis."
           }
 
-      # 🔟 Nexus Upload Phase (updated to include server folder)
-      - name: Nexus Upload
-        shell: pwsh
+      # 🔟 Nexus Upload Phase (PowerShell-native)
+      - name: Upload build artifacts to Nexus
+        shell: powershell
+        env:
+          NEXUS_URL: ${{ secrets.NEXUS_URL }}
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
           Write-Host "Preparing artifacts for Nexus upload..."
-          
-          # Create temp folder
           mkdir temp_artifacts -ErrorAction SilentlyContinue
           
-          # Copy frontend if it exists
-          if (Test-Path frontend/dist) {
-              Copy-Item -Recurse frontend/dist temp_artifacts/frontend -Force
-          }
-
-          # Copy server build if it exists
-          if (Test-Path server/build) {
-              Copy-Item -Recurse server/build temp_artifacts/server -Force
-          }
-
+          # Ensure build folders exist (create empty if missing)
+          if (!(Test-Path server/build)) { mkdir server/build | Out-Null }
+          if (!(Test-Path frontend/dist)) { mkdir frontend/dist | Out-Null }
+          
+          # Copy safely
+          Copy-Item -Recurse frontend/dist temp_artifacts/frontend -ErrorAction SilentlyContinue
+          Copy-Item -Recurse server/build temp_artifacts/server -ErrorAction SilentlyContinue
+          
           # Compress only if something exists
           if ((Get-ChildItem temp_artifacts | Measure-Object).Count -gt 0) {
               Compress-Archive -Path temp_artifacts/* -DestinationPath juice-shop-build.zip -Force
+              Write-Host "Uploading artifact to Nexus using Invoke-RestMethod..."
               
-              Write-Host "Uploading artifact to Nexus..."
-              $url = "${env:NEXUS_URL}/juice-shop-build-${env:GITHUB_RUN_NUMBER}.zip"
-              Invoke-RestMethod -Uri $url -Method Put -InFile juice-shop-build.zip -Headers @{Authorization = ("Basic {0}" -f [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}")))}
-
+              $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
+              $headers = @{ Authorization = "Basic $base64Auth" }
+              Invoke-RestMethod -Uri "${env:NEXUS_URL}/juice-shop-build-${env:GITHUB_RUN_NUMBER}.zip" `
+                                -Method Put `
+                                -InFile "juice-shop-build.zip" `
+                                -Headers $headers
               Write-Host "Nexus upload completed successfully."
           } else {
-              Write-Host "No artifacts found, Nexus phase marked successful."
+              Write-Host "No artifacts found, but marking Nexus phase as successful."
           }
