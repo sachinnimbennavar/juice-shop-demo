@@ -1,3 +1,16 @@
+name: Juice Shop CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  # your existing build, sonar, and nexus-upload jobs here
+
   deploy:
     runs-on: self-hosted
     steps:
