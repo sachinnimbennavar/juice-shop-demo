@@ -9,9 +9,7 @@ on:
       - main
 
 jobs:
-  # your existing build, sonar, and nexus-upload jobs here
-
-  deploy:
+  deploy:   # 👈 must be nested under 'jobs'
     runs-on: self-hosted
     steps:
       - name: Deploy from Nexus
@@ -20,6 +18,7 @@ jobs:
           NEXUS_URL: http://127.0.0.1:8081
           NEXUS_USERNAME: admin
           NEXUS_PASSWORD: Nexus@123
+          NEXUS_REPO: juice-shop-artifacts
           FRONTEND_DEST: C:\inetpub\wwwroot\juice-shop
           SERVER_DEST: C:\JuiceShopServer
           SERVER_PROCESS_NAME: JuiceShopServer
@@ -30,19 +29,27 @@ jobs:
               param ([string]$artifactType)
               $authHeader = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("$env:NEXUS_USERNAME:$env:NEXUS_PASSWORD"))
               $headers = @{ Authorization = "Basic $authHeader" }
-              $uri = "$env:NEXUS_URL/service/rest/v1/search/assets?repository=juice-shop&name=$artifactType"
+              $uri = "$env:NEXUS_URL/service/rest/v1/search/assets?repository=$env:NEXUS_REPO&name=$artifactType"
+              Write-Host "🔍 Fetching latest asset from: $uri"
               $response = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get
-              if ($response.items.Count -eq 0) { return $null }
+              if (-not $response.items -or $response.items.Count -eq 0) {
+                  Write-Host "⚠️ No $artifactType files found"
+                  return $null
+              }
               $latest = $response.items | Sort-Object {[datetime]$_.lastModified} -Descending | Select-Object -First 1
+              Write-Host "📦 Latest artifact: $($latest.downloadUrl)"
               return $latest.downloadUrl
           }
 
           function Download-And-Extract {
               param ([string]$url, [string]$destination)
-              if (-Not $url) { Write-Host "⚠️ No URL provided"; return }
+              if (-not $url) { Write-Host "⚠️ No URL provided"; return }
+              $authHeader = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("$env:NEXUS_USERNAME:$env:NEXUS_PASSWORD"))
               $zipFile = Join-Path $env:TEMP ([System.IO.Path]::GetFileName($url))
-              Invoke-RestMethod -Uri $url -OutFile $zipFile -Headers @{ Authorization = "Basic " + [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("$env:NEXUS_USERNAME:$env:NEXUS_PASSWORD")) }
-              if (-Not (Test-Path $destination)) { New-Item -ItemType Directory -Path $destination -Force | Out-Null }
+              Write-Host "⬇️ Downloading $url..."
+              Invoke-RestMethod -Uri $url -OutFile $zipFile -Headers @{ Authorization = "Basic $authHeader" }
+              if (-not (Test-Path $destination)) { New-Item -ItemType Directory -Path $destination -Force | Out-Null }
+              Write-Host "📂 Extracting to $destination..."
               Expand-Archive -Path $zipFile -DestinationPath $destination -Force
           }
 
@@ -61,9 +68,10 @@ jobs:
               Stop-Service -Name $env:SERVER_PROCESS_NAME -Force
               Start-Sleep -Seconds 5
           }
-          if (-Not (Get-Service -Name $env:SERVER_PROCESS_NAME -ErrorAction SilentlyContinue)) {
+
+          if (-not (Get-Service -Name $env:SERVER_PROCESS_NAME -ErrorAction SilentlyContinue)) {
               nssm install $env:SERVER_PROCESS_NAME "C:\Program Files\nodejs\node.exe" "$env:SERVER_DEST\build\server.js"
           }
-          Start-Service -Name $env:SERVER_PROCESS_NAME
 
+          Start-Service -Name $env:SERVER_PROCESS_NAME
           Write-Host "✅ Deployment completed successfully!"
