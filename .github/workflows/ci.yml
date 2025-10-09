@@ -1,4 +1,4 @@
-name: Nexus Upload Optimized
+name: Nexus Upload Test Full
 
 on:
   workflow_dispatch:  # manual trigger for testing
@@ -12,32 +12,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2️⃣ Setup Node.js (ensure compatible Node version)
-      - name: Setup Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: 20
-          cache: 'npm'
-
-      # 3️⃣ Build Frontend (optimized, same logic)
+      # 2️⃣ Build Frontend
       - name: Build frontend
         run: |
           cd frontend
-          echo "📦 Installing frontend dependencies..."
           npm install --legacy-peer-deps --prefer-offline --no-audit
-          echo "⚙️ Building Angular app..."
           npm run build -- --configuration production --watch=false
           cd ..
-
-      # 4️⃣ Build Server (optimized)
+      # 3️⃣ Build Server
       - name: Build server
         run: |
-          echo "📦 Installing backend dependencies..."
           npm install --prefer-offline --no-audit
-          echo "⚙️ Building server..."
           npm run build:server
-
-      # 5️⃣ Nexus Upload Phase (unchanged, stable PowerShell version)
+      # 4️⃣ Nexus Upload Phase
       - name: Upload build artifacts to Nexus
         shell: powershell
         env:
@@ -46,7 +33,6 @@ jobs:
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
           Write-Host "🧩 Preparing frontend and server zips..."
-
           # Frontend zip
           if (Test-Path "frontend/dist") {
               Write-Host "Creating frontend-build.zip..."
@@ -54,8 +40,7 @@ jobs:
           } else {
               Write-Host "⚠️ frontend/dist not found, skipping frontend zip."
           }
-
-          # Server zip
+          # Server zip (source + compiled JS)
           Write-Host "Creating server-build.zip..."
           $serverPaths = @(
               "app.ts",
@@ -69,21 +54,18 @@ jobs:
               "views",
               "rsn",
               "config",
-              "build"
+              "build"  # compiled JS from tsc
           ) | Where-Object { Test-Path $_ }
-
           if ($serverPaths.Count -gt 0) {
               Compress-Archive -Path $serverPaths -DestinationPath "server-build.zip" -Force
               Write-Host "✅ Server zip created successfully."
           } else {
               Write-Host "⚠️ No backend files found to zip."
           }
-
           # Upload to Nexus
           Write-Host "⬆️ Uploading zips to Nexus..."
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
-
           if (Test-Path "frontend-build.zip") {
               Write-Host "Uploading frontend-build.zip..."
               Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/juice-shop/frontend-build-${env:GITHUB_RUN_NUMBER}.zip" `
@@ -91,7 +73,6 @@ jobs:
                                 -InFile "frontend-build.zip" `
                                 -Headers $headers
           }
-
           if (Test-Path "server-build.zip") {
               Write-Host "Uploading server-build.zip..."
               Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/juice-shop/server-build-${env:GITHUB_RUN_NUMBER}.zip" `
@@ -99,5 +80,4 @@ jobs:
                                 -InFile "server-build.zip" `
                                 -Headers $headers
           }
-
           Write-Host "✅ Nexus upload completed successfully."
