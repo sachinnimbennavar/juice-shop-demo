@@ -1,62 +1,129 @@
-name: Juice Shop Deployment Only
+name: Juice Shop CI
 
 on:
-  workflow_dispatch:   # Manual trigger
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
 
 jobs:
-  deploy:
+  build:
     runs-on: self-hosted
+
     steps:
-      - name: Deploy from Nexus
+      # 1️⃣ Checkout the repository
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # 2️⃣ Set Node memory for server build
+      - name: Set Node memory
+        run: set NODE_OPTIONS=--max_old_space_size=4096
+
+      # 3️⃣ Cache frontend dependencies and Angular build output
+      - name: Cache frontend
+        uses: actions/cache@v3
+        with:
+          path: |
+            frontend/node_modules
+            frontend/dist
+            frontend/.angular
+          key: ${{ runner.os }}-frontend-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-frontend-
+      # 4️⃣ Cache server dependencies
+      - name: Cache server
+        uses: actions/cache@v3
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-server-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-server-
+      # 5️⃣ Install frontend dependencies
+      - name: Install frontend dependencies
+        run: |
+          cd frontend
+          npm install --legacy-peer-deps --prefer-offline --no-audit
+          cd ..
+      # 6️⃣ Build frontend (Angular incremental build handled automatically)
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm run build -- --configuration production --watch=false --verbose
+          cd ..
+      # 7️⃣ Install server dependencies
+      - name: Install server dependencies
+        run: npm install --prefer-offline --no-audit
+
+      # 8️⃣ Build server
+      - name: Build server
+        run: npm run build:server
+
+      # 9️⃣ Optional SonarQube analysis (safe skip if not installed)
+      - name: SonarQube Scan
+        run: |
+          if (Get-Command sonar-scanner -ErrorAction SilentlyContinue) {
+              echo "Running SonarQube scanner..."
+              set SONAR_HOST_URL=http://127.0.0.1:9000
+              sonar-scanner
+          } else {
+              echo "sonar-scanner not found, skipping SonarQube analysis."
+          }
+      # 🔟 Nexus Upload Phase
+      - name: Upload build artifacts to Nexus
         shell: powershell
         env:
-          NEXUS_URL: http://127.0.0.1:8081
-          NEXUS_USERNAME: admin
-          NEXUS_PASSWORD: Nexus@123
-          FRONTEND_DEST: C:\inetpub\wwwroot\juice-shop
-          SERVER_DEST: C:\JuiceShopServer
-          SERVER_PROCESS_NAME: JuiceShopServer
+          NEXUS_URL: ${{ secrets.NEXUS_URL }}
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
-          Write-Host "Starting deployment..."
-
-          function Get-LatestZip {
-              param ([string]$artifactType)
-              $authHeader = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("$env:NEXUS_USERNAME:$env:NEXUS_PASSWORD"))
-              $headers = @{ Authorization = "Basic $authHeader" }
-              $uri = "$env:NEXUS_URL/service/rest/v1/search/assets?repository=juice-shop-artifacts&name=$artifactType"
-              $response = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get
-              if ($response.items.Count -eq 0) { return $null }
-              $latest = $response.items | Sort-Object {[datetime]$_.lastModified} -Descending | Select-Object -First 1
-              return $latest.downloadUrl
+          Write-Host "🧩 Preparing frontend and server zips..."
+          # Frontend zip
+          if (Test-Path "frontend/dist") {
+              Write-Host "Creating frontend-build.zip..."
+              Compress-Archive -Path "frontend/dist/*" -DestinationPath "frontend-build.zip" -Force
+          } else {
+              Write-Host "⚠️ frontend/dist not found, skipping frontend zip."
           }
-
-          function Download-And-Extract {
-              param ([string]$url, [string]$destination)
-              if (-Not $url) { Write-Host "No URL provided"; return }
-              $zipFile = Join-Path $env:TEMP ([System.IO.Path]::GetFileName($url))
-              Invoke-RestMethod -Uri $url -OutFile $zipFile -Headers @{ Authorization = "Basic " + [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("$env:NEXUS_USERNAME:$env:NEXUS_PASSWORD")) }
-              if (-Not (Test-Path $destination)) { New-Item -ItemType Directory -Path $destination -Force | Out-Null }
-              Write-Host "Extracting $zipFile to $destination..."
-              Expand-Archive -Path $zipFile -DestinationPath $destination -Force
+          # Server zip (source + compiled JS)
+          Write-Host "Creating server-build.zip..."
+          $serverPaths = @(
+              "app.ts",
+              "server.ts",
+              "package.json",
+              "tsconfig.json",
+              "models",
+              "routes",
+              "lib",
+              "data",
+              "views",
+              "rsn",
+              "config",
+              "build"
+          ) | Where-Object { Test-Path $_ }
+          if ($serverPaths.Count -gt 0) {
+              Compress-Archive -Path $serverPaths -DestinationPath "server-build.zip" -Force
+              Write-Host "✅ Server zip created successfully."
+          } else {
+              Write-Host "⚠️ No backend files found to zip."
           }
-
-          # Deploy frontend
-          $frontendUrl = Get-LatestZip -artifactType "frontend-build"
-          Download-And-Extract -url $frontendUrl -destination $env:FRONTEND_DEST
-          Write-Host "Frontend deployed to $env:FRONTEND_DEST"
-
-          # Deploy server
-          $serverUrl = Get-LatestZip -artifactType "server-build"
-          Download-And-Extract -url $serverUrl -destination $env:SERVER_DEST
-          Write-Host "Server deployed to $env:SERVER_DEST"
-
-          # Restart server process via NSSM
-          if (Get-Service -Name $env:SERVER_PROCESS_NAME -ErrorAction SilentlyContinue) {
-              Stop-Service -Name $env:SERVER_PROCESS_NAME -Force
-              Start-Sleep -Seconds 5
+          # Upload to Nexus
+          Write-Host "⬆️ Uploading zips to Nexus..."
+          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
+          $headers = @{ Authorization = "Basic $base64Auth" }
+          if (Test-Path "frontend-build.zip") {
+              Write-Host "Uploading frontend-build.zip..."
+              Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/juice-shop/frontend-build-${env:GITHUB_RUN_NUMBER}.zip" `
+                                -Method Put `
+                                -InFile "frontend-build.zip" `
+                                -Headers $headers
           }
-          if (-Not (Get-Service -Name $env:SERVER_PROCESS_NAME -ErrorAction SilentlyContinue)) {
-              nssm install $env:SERVER_PROCESS_NAME "C:\Program Files\nodejs\node.exe" "$env:SERVER_DEST\build\server.js"
+          if (Test-Path "server-build.zip") {
+              Write-Host "Uploading server-build.zip..."
+              Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/juice-shop/server-build-${env:GITHUB_RUN_NUMBER}.zip" `
+                                -Method Put `
+                                -InFile "server-build.zip" `
+                                -Headers $headers
           }
-          Start-Service -Name $env:SERVER_PROCESS_NAME
-          Write-Host "Deployment completed successfully!"
+          Write-Host "✅ Nexus upload completed successfully."
