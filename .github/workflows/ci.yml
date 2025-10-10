@@ -66,11 +66,11 @@ jobs:
           $headers = @{ Authorization = "Basic $authHeader" }
 
           if (Test-Path "frontend-build-76.zip") {
-              Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/juice-shop-artifacts/juice-shop/frontend-build-76.zip" -Method Put -InFile "frontend-build-76.zip" -Headers $headers
+              Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/juice-shop-artifacts/frontend-build-76.zip" -Method Put -InFile "frontend-build-76.zip" -Headers $headers
           }
 
           if (Test-Path "server-build-76.zip") {
-              Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/juice-shop-artifacts/juice-shop/server-build-76.zip" -Method Put -InFile "server-build-76.zip" -Headers $headers
+              Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/juice-shop-artifacts/server-build-76.zip" -Method Put -InFile "server-build-76.zip" -Headers $headers
           }
 
           Write-Host "[INFO] Nexus upload completed successfully."
@@ -105,9 +105,9 @@ jobs:
               Expand-Archive -Path $zipFile -DestinationPath $destination -Force
           }
 
-          # Correct URLs including the component group folder
-          $frontendUrl = "$env:NEXUS_URL/repository/juice-shop-artifacts/juice-shop/frontend-build-76.zip"
-          $serverUrl   = "$env:NEXUS_URL/repository/juice-shop-artifacts/juice-shop/server-build-76.zip"
+          # Correct URLs (no extra folder, matches raw repository)
+          $frontendUrl = "$env:NEXUS_URL/repository/juice-shop-artifacts/frontend-build-76.zip"
+          $serverUrl   = "$env:NEXUS_URL/repository/juice-shop-artifacts/server-build-76.zip"
 
           # Deploy frontend
           Download-And-Extract -url $frontendUrl -destination $env:FRONTEND_DEST
