@@ -14,12 +14,12 @@ on:
         required: false
         default: "false"
       run_build:
-        description: "Run build (can be combined with deploy_only=false to run deployment after build)"
+        description: "Run build (set to false if deploy_only=true)"
         required: false
         default: "true"
 
 jobs:
-  build:
+  build-and-deploy:
     runs-on: self-hosted
 
     steps:
@@ -122,18 +122,18 @@ jobs:
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
           FRONTEND_DEST: C:\inetpub\wwwroot\juice-shop
           SERVER_DEST: C:\JuiceShopServer
-          SERVER_PROCESS_NAME: JuiceShopServer
         run: |
           Write-Host "[INFO] Starting deployment..."
 
           function Get-LatestZip {
               param ([string]$artifactPrefix)
+
               $pair = "$($env:NEXUS_USERNAME):$($env:NEXUS_PASSWORD)"
               $authHeader = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($pair))
               $headers = @{ Authorization = "Basic $authHeader" }
 
-              # Correct repo + group
-              $uri = "$env:NEXUS_URL/service/rest/v1/search/assets?repository=juice-shop-artifacts&group=juice-shop"
+              # Raw repository, no group
+              $uri = "$env:NEXUS_URL/service/rest/v1/search/assets?repository=juice-shop-artifacts"
               Write-Host "[INFO] Querying Nexus: $uri"
 
               try {
@@ -144,54 +144,9 @@ jobs:
               }
 
               if ($null -eq $response.items -or $response.items.Count -eq 0) {
-                  Write-Host "[WARN] No items found in Nexus for repository 'juice-shop-artifacts' and group 'juice-shop'"
+                  Write-Host "[WARN] No items found in Nexus for repository 'juice-shop-artifacts'"
                   return $null
               }
 
-              # Filter by artifact prefix
-              $filtered = $response.items | Where-Object { $_.name -like "$artifactPrefix*.zip" }
-              if ($filtered.Count -eq 0) {
-                  Write-Host "[WARN] No artifact found matching prefix '$artifactPrefix'"
-                  return $null
-              }
-
-              # Return latest
-              $latest = $filtered | Sort-Object {[datetime]$_.lastModified} -Descending | Select-Object -First 1
-              return $latest.downloadUrl
-          }
-
-          function Download-And-Extract {
-              param ([string]$url, [string]$destination)
-              if (-Not $url) { Write-Host "[WARN] No URL provided"; return }
-              $zipFile = Join-Path $env:TEMP ([System.IO.Path]::GetFileName($url))
-              Write-Host "[INFO] Downloading $url..."
-              Invoke-RestMethod -Uri $url -OutFile $zipFile -Headers @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$env:NEXUS_USERNAME:$env:NEXUS_PASSWORD")) }
-              if (-Not (Test-Path $destination)) { New-Item -ItemType Directory -Path $destination -Force | Out-Null }
-              Write-Host "[INFO] Extracting to $destination..."
-              Expand-Archive -Path $zipFile -DestinationPath $destination -Force
-          }
-
-          # Deploy frontend
-          $frontendUrl = Get-LatestZip -artifactPrefix "frontend-build"
-          Download-And-Extract -url $frontendUrl -destination $env:FRONTEND_DEST
-          Write-Host "[INFO] Frontend deployed to $env:FRONTEND_DEST"
-
-          # Deploy server
-          $serverUrl = Get-LatestZip -artifactPrefix "server-build"
-          Download-And-Extract -url $serverUrl -destination $env:SERVER_DEST
-          Write-Host "[INFO] Server deployed to $env:SERVER_DEST"
-
-          # Restart Node.js server (NSSM)
-          if (Get-Command nssm -ErrorAction SilentlyContinue) {
-              if (Get-Service -Name $env:SERVER_PROCESS_NAME -ErrorAction SilentlyContinue) {
-                  Stop-Service -Name $env:SERVER_PROCESS_NAME -Force
-                  Start-Sleep -Seconds 5
-              }
-              if (-Not (Get-Service -Name $env:SERVER_PROCESS_NAME -ErrorAction SilentlyContinue)) {
-                  nssm install $env:SERVER_PROCESS_NAME "C:\Program Files\nodejs\node.exe" "$env:SERVER_DEST\build\server.js"
-              }
-              Start-Service -Name $env:SERVER_PROCESS_NAME
-              Write-Host "[INFO] Deployment completed successfully!"
-          } else {
-              Write-Host "[ERROR] NSSM is not installed. Install NSSM or manage the Node server manually."
-          }
+              # Filter by artifact prefix (frontend-build* / server-build*)
+              $filtered = $response.items | Where-Object { $_
