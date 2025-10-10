@@ -10,13 +10,14 @@ on:
   workflow_dispatch:
     inputs:
       deploy_only:
-        description: 'Run only deployment stage'
+        description: "Run only deployment"
         required: false
-        default: 'false'
+        default: "false"
 
 jobs:
   build:
     runs-on: self-hosted
+
     steps:
       # 1️⃣ Checkout the repository
       - name: Checkout repository
@@ -95,35 +96,63 @@ jobs:
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
           Write-Host "🧩 Preparing frontend and server zips..."
+          # Frontend zip
           if (Test-Path "frontend/dist") {
               Write-Host "Creating frontend-build.zip..."
               Compress-Archive -Path "frontend/dist/*" -DestinationPath "frontend-build.zip" -Force
+          } else {
+              Write-Host "⚠️ frontend/dist not found, skipping frontend zip."
           }
+          # Server zip
+          Write-Host "Creating server-build.zip..."
           $serverPaths = @(
-              "app.ts","server.ts","package.json","tsconfig.json","models","routes","lib","data","views","rsn","config","build"
+              "app.ts",
+              "server.ts",
+              "package.json",
+              "tsconfig.json",
+              "models",
+              "routes",
+              "lib",
+              "data",
+              "views",
+              "rsn",
+              "config",
+              "build"
           ) | Where-Object { Test-Path $_ }
           if ($serverPaths.Count -gt 0) {
               Compress-Archive -Path $serverPaths -DestinationPath "server-build.zip" -Force
+              Write-Host "✅ Server zip created successfully."
+          } else {
+              Write-Host "⚠️ No backend files found to zip."
           }
+          # Upload to Nexus
+          Write-Host "⬆️ Uploading zips to Nexus..."
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
           if (Test-Path "frontend-build.zip") {
+              Write-Host "Uploading frontend-build.zip..."
               Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/juice-shop/frontend-build-${env:GITHUB_RUN_NUMBER}.zip" `
-                                -Method Put -InFile "frontend-build.zip" -Headers $headers
+                                -Method Put `
+                                -InFile "frontend-build.zip" `
+                                -Headers $headers
           }
           if (Test-Path "server-build.zip") {
+              Write-Host "Uploading server-build.zip..."
               Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/juice-shop/server-build-${env:GITHUB_RUN_NUMBER}.zip" `
-                                -Method Put -InFile "server-build.zip" -Headers $headers
+                                -Method Put `
+                                -InFile "server-build.zip" `
+                                -Headers $headers
           }
+          Write-Host "✅ Nexus upload completed successfully."
 
-      # 1️⃣1️⃣ Deployment Stage
+      # 11️⃣ Deployment stage
       - name: Deploy from Nexus
-        if: ${{ github.event.inputs.deploy_only == 'true' || always() }}
+        if: ${{ github.event.inputs.deploy_only == 'true' }}
         shell: powershell
         env:
           NEXUS_URL: http://127.0.0.1:8081
-          NEXUS_USERNAME: admin
-          NEXUS_PASSWORD: Nexus@123
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
           FRONTEND_DEST: C:\inetpub\wwwroot\juice-shop
           SERVER_DEST: C:\JuiceShopServer
           SERVER_PROCESS_NAME: JuiceShopServer
@@ -131,38 +160,38 @@ jobs:
           Write-Host "🟢 Starting deployment..."
 
           function Get-LatestZip {
-              param ([string]$pattern)
-              $authHeader = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("$env:NEXUS_USERNAME:$env:NEXUS_PASSWORD"))
+              param ([string]$artifactType)
+              $pair = "$($env:NEXUS_USERNAME):$($env:NEXUS_PASSWORD)"
+              $authHeader = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($pair))
               $headers = @{ Authorization = "Basic $authHeader" }
-
-              $uri = "$env:NEXUS_URL/service/rest/v1/search/assets?repository=juice-shop-artifacts"
+              $uri = "$env:NEXUS_URL/service/rest/v1/search/assets?repository=juice-shop-artifacts&name=$artifactType"
               $response = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get
-
-              $latest = $response.items | Where-Object { $_.name -like "$pattern*.zip" } |
-                        Sort-Object {[datetime]$_.lastModified} -Descending |
-                        Select-Object -First 1
-
+              if ($response.items.Count -eq 0) { 
+                  Write-Host "⚠️ No $artifactType found in Nexus"
+                  return $null 
+              }
+              $latest = $response.items | Sort-Object {[datetime]$_.lastModified} -Descending | Select-Object -First 1
               return $latest.downloadUrl
           }
 
           function Download-And-Extract {
               param ([string]$url, [string]$destination)
               if (-Not $url) { Write-Host "⚠️ No URL provided"; return }
-
               $zipFile = Join-Path $env:TEMP ([System.IO.Path]::GetFileName($url))
-              Invoke-RestMethod -Uri $url -OutFile $zipFile -Headers @{ Authorization = "Basic " + [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("$env:NEXUS_USERNAME:$env:NEXUS_PASSWORD")) }
-
+              Write-Host "⬇️ Downloading $url..."
+              Invoke-RestMethod -Uri $url -OutFile $zipFile -Headers @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$env:NEXUS_USERNAME:$env:NEXUS_PASSWORD")) }
               if (-Not (Test-Path $destination)) { New-Item -ItemType Directory -Path $destination -Force | Out-Null }
+              Write-Host "📦 Extracting to $destination..."
               Expand-Archive -Path $zipFile -DestinationPath $destination -Force
           }
 
           # Deploy frontend
-          $frontendUrl = Get-LatestZip -pattern "frontend-build"
+          $frontendUrl = Get-LatestZip -artifactType "frontend-build"
           Download-And-Extract -url $frontendUrl -destination $env:FRONTEND_DEST
           Write-Host "✅ Frontend deployed to $env:FRONTEND_DEST"
 
           # Deploy server
-          $serverUrl = Get-LatestZip -pattern "server-build"
+          $serverUrl = Get-LatestZip -artifactType "server-build"
           Download-And-Extract -url $serverUrl -destination $env:SERVER_DEST
           Write-Host "✅ Server deployed to $env:SERVER_DEST"
 
@@ -175,5 +204,4 @@ jobs:
               nssm install $env:SERVER_PROCESS_NAME "C:\Program Files\nodejs\node.exe" "$env:SERVER_DEST\build\server.js"
           }
           Start-Service -Name $env:SERVER_PROCESS_NAME
-
           Write-Host "✅ Deployment completed successfully!"
