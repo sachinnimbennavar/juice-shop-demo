@@ -19,14 +19,15 @@ jobs:
     runs-on: self-hosted
 
     steps:
+      # 1️⃣ Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # Set Node memory
+      # 2️⃣ Set Node memory
       - name: Set Node memory
         run: set NODE_OPTIONS=--max_old_space_size=4096
 
-      # Build frontend (if not deploy_only)
+      # 3️⃣ Build frontend (skip if deploy_only)
       - name: Build frontend
         if: ${{ github.event.inputs.deploy_only != 'true' }}
         run: |
@@ -35,15 +36,15 @@ jobs:
           npm run build -- --configuration production --watch=false --verbose
           cd ..
 
-      # Build server (if not deploy_only)
+      # 4️⃣ Build server (skip if deploy_only)
       - name: Build server
         if: ${{ github.event.inputs.deploy_only != 'true' }}
         run: |
           npm install --prefer-offline --no-audit
           npm run build:server
 
-      # Upload artifacts to Nexus (if not deploy_only)
-      - name: Upload to Nexus
+      # 5️⃣ Upload build artifacts to Nexus (skip if deploy_only)
+      - name: Upload build artifacts to Nexus
         if: ${{ github.event.inputs.deploy_only != 'true' }}
         shell: powershell
         env:
@@ -52,13 +53,16 @@ jobs:
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
           Write-Host "[INFO] Preparing frontend and server zips..."
+          # Frontend
           if (Test-Path "frontend/dist") {
               Compress-Archive -Path "frontend/dist/*" -DestinationPath "frontend-build.zip" -Force
           }
+          # Server
           $serverPaths = @("app.ts","server.ts","package.json","tsconfig.json","models","routes","lib","data","views","rsn","config","build") | Where-Object { Test-Path $_ }
           if ($serverPaths.Count -gt 0) {
               Compress-Archive -Path $serverPaths -DestinationPath "server-build.zip" -Force
           }
+          # Upload to Nexus
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
           if (Test-Path "frontend-build.zip") {
@@ -69,7 +73,7 @@ jobs:
           }
           Write-Host "[INFO] Nexus upload completed successfully."
 
-      # Deployment stage
+      # 6️⃣ Deployment stage (always runs if deploy_only=true or after build)
       - name: Deploy from Nexus
         shell: powershell
         env:
@@ -81,65 +85,74 @@ jobs:
         run: |
           Write-Host "[INFO] Starting deployment..."
 
-          function Get-LatestZip {
-              param ([string]$artifactPrefix)
+          # Function to get latest artifact from raw repository
+          function Get-LatestRawArtifact {
+              param (
+                  [string]$repoUrl,
+                  [string]$artifactPrefix
+              )
+
               $pair = "$($env:NEXUS_USERNAME):$($env:NEXUS_PASSWORD)"
               $authHeader = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($pair))
               $headers = @{ Authorization = "Basic $authHeader" }
 
-              $uri = "$env:NEXUS_URL/service/rest/v1/search/assets?repository=juice-shop-artifacts"
-              Write-Host "[INFO] Querying Nexus: $uri"
-
+              Write-Host "[INFO] Listing artifacts in raw repository: $repoUrl"
               try {
-                  $response = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get
+                  $response = Invoke-RestMethod -Uri "$repoUrl/service/rest/v1/components?repository=juice-shop-artifacts" -Headers $headers -Method Get
               } catch {
-                  Write-Host "[ERROR] Nexus API call failed: $_"
+                  Write-Host "[ERROR] Failed to query Nexus: $_"
                   return $null
               }
 
               if ($null -eq $response.items -or $response.items.Count -eq 0) {
-                  Write-Host "[WARN] No items found in Nexus for repository 'juice-shop-artifacts'"
+                  Write-Host "[WARN] No items found in repository"
                   return $null
               }
 
-              $filtered = $response.items | Where-Object { $_.name -like "$artifactPrefix*.zip" }
+              # Filter by artifact prefix
+              $filtered = $response.items | Where-Object { $_.assets[0].path -like "$artifactPrefix*.zip" }
               if ($filtered.Count -eq 0) {
                   Write-Host "[WARN] No artifact found matching prefix '$artifactPrefix'"
                   return $null
               }
 
-              $latest = $filtered | Sort-Object {[datetime]$_.lastModified} -Descending | Select-Object -First 1
-              return $latest.downloadUrl
+              # Return latest artifact download URL
+              $latest = $filtered | Sort-Object {[datetime]$_.assets[0].lastModified} -Descending | Select-Object -First 1
+              return "$repoUrl/$($latest.assets[0].path)"
           }
 
+          # Function to download and extract zip
           function Download-And-Extract {
               param ([string]$url, [string]$destination)
               if (-Not $url) { Write-Host "[WARN] No URL provided"; return }
 
               $zipFile = Join-Path $env:TEMP ([System.IO.Path]::GetFileName($url))
               Write-Host "[INFO] Downloading $url..."
-              Invoke-RestMethod -Uri $url -OutFile $zipFile -Headers @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$env:NEXUS_USERNAME:$env:NEXUS_PASSWORD")) }
+              Invoke-WebRequest -Uri $url -OutFile $zipFile -Headers @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$env:NEXUS_USERNAME:$env:NEXUS_PASSWORD")) }
 
               if (-Not (Test-Path $destination)) { New-Item -ItemType Directory -Path $destination -Force | Out-Null }
               Write-Host "[INFO] Extracting to $destination..."
               Expand-Archive -Path $zipFile -DestinationPath $destination -Force
           }
 
+          # Base raw repository URL
+          $rawRepoUrl = $env:NEXUS_URL + "/repository/juice-shop-artifacts"
+
           # Deploy frontend
-          $frontendUrl = Get-LatestZip -artifactPrefix "frontend-build"
+          $frontendUrl = Get-LatestRawArtifact -repoUrl $rawRepoUrl -artifactPrefix "frontend-build"
           Download-And-Extract -url $frontendUrl -destination $env:FRONTEND_DEST
           Write-Host "[INFO] Frontend deployed to $env:FRONTEND_DEST"
 
           # Deploy server
-          $serverUrl = Get-LatestZip -artifactPrefix "server-build"
+          $serverUrl = Get-LatestRawArtifact -repoUrl $rawRepoUrl -artifactPrefix "server-build"
           Download-And-Extract -url $serverUrl -destination $env:SERVER_DEST
           Write-Host "[INFO] Server deployed to $env:SERVER_DEST"
 
-          # Stop any existing Node server
+          # Stop any running Node server
           Write-Host "[INFO] Stopping any running Node processes..."
           Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force
 
-          # Start Node server directly
+          # Start Node server
           $serverScript = Join-Path $env:SERVER_DEST "build\server.js"
           Write-Host "[INFO] Starting Node server: $serverScript"
           Start-Process "node" $serverScript -WindowStyle Hidden
