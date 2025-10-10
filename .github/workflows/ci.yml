@@ -54,23 +54,23 @@ jobs:
         run: |
           Write-Host "[INFO] Preparing frontend and server zips..."
           if (Test-Path "frontend/dist") {
-              Compress-Archive -Path "frontend/dist/*" -DestinationPath "frontend-build-76.zip" -Force
+              Compress-Archive -Path "frontend/dist/*" -DestinationPath "frontend-build.zip" -Force
           }
           $serverPaths = @("app.ts","server.ts","package.json","tsconfig.json","models","routes","lib","data","views","rsn","config","build") | Where-Object { Test-Path $_ }
           if ($serverPaths.Count -gt 0) {
-              Compress-Archive -Path $serverPaths -DestinationPath "server-build-76.zip" -Force
+              Compress-Archive -Path $serverPaths -DestinationPath "server-build.zip" -Force
           }
 
           $pair = "$($env:NEXUS_USERNAME):$($env:NEXUS_PASSWORD)"
           $authHeader = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($pair))
           $headers = @{ Authorization = "Basic $authHeader" }
 
-          if (Test-Path "frontend-build-76.zip") {
-              Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/juice-shop-artifacts/frontend-build-76.zip" -Method Put -InFile "frontend-build-76.zip" -Headers $headers
+          if (Test-Path "frontend-build.zip") {
+              Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/juice-shop-artifacts/frontend-build.zip" -Method Put -InFile "frontend-build.zip" -Headers $headers
           }
 
-          if (Test-Path "server-build-76.zip") {
-              Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/juice-shop-artifacts/server-build-76.zip" -Method Put -InFile "server-build-76.zip" -Headers $headers
+          if (Test-Path "server-build.zip") {
+              Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/juice-shop-artifacts/server-build.zip" -Method Put -InFile "server-build.zip" -Headers $headers
           }
 
           Write-Host "[INFO] Nexus upload completed successfully."
@@ -86,6 +86,38 @@ jobs:
           SERVER_DEST: C:\JuiceShopServer
         run: |
           Write-Host "[INFO] Starting deployment..."
+
+          function Get-LatestArtifact {
+              param([string]$artifactPrefix)
+              $pair = "$($env:NEXUS_USERNAME):$($env:NEXUS_PASSWORD)"
+              $authHeader = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($pair))
+              $headers = @{ Authorization = "Basic $authHeader" }
+
+              $uri = "$env:NEXUS_URL/service/rest/v1/search/assets?repository=juice-shop-artifacts"
+              Write-Host "[INFO] Listing artifacts in Nexus: $uri"
+
+              try {
+                  $response = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get
+              } catch {
+                  Write-Host "[ERROR] Failed to query Nexus: $_"
+                  return $null
+              }
+
+              if ($null -eq $response.items -or $response.items.Count -eq 0) {
+                  Write-Host "[WARN] No artifacts found in Nexus."
+                  return $null
+              }
+
+              $filtered = $response.items | Where-Object { $_.name -like "$artifactPrefix*.zip" }
+
+              if ($filtered.Count -eq 0) {
+                  Write-Host "[WARN] No artifact found matching prefix '$artifactPrefix'"
+                  return $null
+              }
+
+              $latest = $filtered | Sort-Object {[datetime]$_.lastModified} -Descending | Select-Object -First 1
+              return $latest.downloadUrl
+          }
 
           function Download-And-Extract {
               param ([string]$url, [string]$destination)
@@ -105,15 +137,13 @@ jobs:
               Expand-Archive -Path $zipFile -DestinationPath $destination -Force
           }
 
-          # Correct URLs (no extra folder, matches raw repository)
-          $frontendUrl = "$env:NEXUS_URL/repository/juice-shop-artifacts/frontend-build-76.zip"
-          $serverUrl   = "$env:NEXUS_URL/repository/juice-shop-artifacts/server-build-76.zip"
-
           # Deploy frontend
+          $frontendUrl = Get-LatestArtifact -artifactPrefix "frontend-build"
           Download-And-Extract -url $frontendUrl -destination $env:FRONTEND_DEST
           Write-Host "[INFO] Frontend deployed to $env:FRONTEND_DEST"
 
           # Deploy server
+          $serverUrl = Get-LatestArtifact -artifactPrefix "server-build"
           Download-And-Extract -url $serverUrl -destination $env:SERVER_DEST
           Write-Host "[INFO] Server deployed to $env:SERVER_DEST"
 
