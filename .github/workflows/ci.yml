@@ -13,88 +13,38 @@ on:
         description: "Run only deployment (skip build)"
         required: false
         default: "false"
-      run_build:
-        description: "Run build (set to false if deploy_only=true)"
-        required: false
-        default: "true"
 
 jobs:
   build-and-deploy:
     runs-on: self-hosted
 
     steps:
-      # 1️⃣ Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2️⃣ Set Node memory
+      # Set Node memory
       - name: Set Node memory
         run: set NODE_OPTIONS=--max_old_space_size=4096
 
-      # 3️⃣ Cache frontend
-      - name: Cache frontend
-        if: ${{ github.event.inputs.run_build == 'true' }}
-        uses: actions/cache@v3
-        with:
-          path: |
-            frontend/node_modules
-            frontend/dist
-            frontend/.angular
-          key: ${{ runner.os }}-frontend-${{ hashFiles('frontend/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-frontend-
-
-      # 4️⃣ Cache server
-      - name: Cache server
-        if: ${{ github.event.inputs.run_build == 'true' }}
-        uses: actions/cache@v3
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-server-${{ hashFiles('package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-server-
-
-      # 5️⃣ Install frontend dependencies
-      - name: Install frontend dependencies
-        if: ${{ github.event.inputs.run_build == 'true' }}
+      # Build frontend (if not deploy_only)
+      - name: Build frontend
+        if: ${{ github.event.inputs.deploy_only != 'true' }}
         run: |
           cd frontend
           npm install --legacy-peer-deps --prefer-offline --no-audit
-          cd ..
-
-      # 6️⃣ Build frontend
-      - name: Build frontend
-        if: ${{ github.event.inputs.run_build == 'true' }}
-        run: |
-          cd frontend
           npm run build -- --configuration production --watch=false --verbose
           cd ..
 
-      # 7️⃣ Install server dependencies
-      - name: Install server dependencies
-        if: ${{ github.event.inputs.run_build == 'true' }}
-        run: npm install --prefer-offline --no-audit
-
-      # 8️⃣ Build server
+      # Build server (if not deploy_only)
       - name: Build server
-        if: ${{ github.event.inputs.run_build == 'true' }}
-        run: npm run build:server
-
-      # 9️⃣ Optional SonarQube
-      - name: SonarQube Scan
-        if: ${{ github.event.inputs.run_build == 'true' }}
+        if: ${{ github.event.inputs.deploy_only != 'true' }}
         run: |
-          if (Get-Command sonar-scanner -ErrorAction SilentlyContinue) {
-              echo "Running SonarQube scanner..."
-              set SONAR_HOST_URL=http://127.0.0.1:9000
-              sonar-scanner
-          } else {
-              echo "sonar-scanner not found, skipping SonarQube analysis."
-          }
+          npm install --prefer-offline --no-audit
+          npm run build:server
 
-      # 🔟 Nexus Upload Phase
-      - name: Upload build artifacts to Nexus
-        if: ${{ github.event.inputs.run_build == 'true' }}
+      # Upload artifacts to Nexus (if not deploy_only)
+      - name: Upload to Nexus
+        if: ${{ github.event.inputs.deploy_only != 'true' }}
         shell: powershell
         env:
           NEXUS_URL: ${{ secrets.NEXUS_URL }}
@@ -106,15 +56,21 @@ jobs:
               Compress-Archive -Path "frontend/dist/*" -DestinationPath "frontend-build.zip" -Force
           }
           $serverPaths = @("app.ts","server.ts","package.json","tsconfig.json","models","routes","lib","data","views","rsn","config","build") | Where-Object { Test-Path $_ }
-          if ($serverPaths.Count -gt 0) { Compress-Archive -Path $serverPaths -DestinationPath "server-build.zip" -Force }
+          if ($serverPaths.Count -gt 0) {
+              Compress-Archive -Path $serverPaths -DestinationPath "server-build.zip" -Force
+          }
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
-          if (Test-Path "frontend-build.zip") { Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/juice-shop/frontend-build-${env:GITHUB_RUN_NUMBER}.zip" -Method Put -InFile "frontend-build.zip" -Headers $headers }
-          if (Test-Path "server-build.zip") { Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/juice-shop/server-build-${env:GITHUB_RUN_NUMBER}.zip" -Method Put -InFile "server-build.zip" -Headers $headers }
+          if (Test-Path "frontend-build.zip") {
+              Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/juice-shop/frontend-build-${env:GITHUB_RUN_NUMBER}.zip" -Method Put -InFile "frontend-build.zip" -Headers $headers
+          }
+          if (Test-Path "server-build.zip") {
+              Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/juice-shop/server-build-${env:GITHUB_RUN_NUMBER}.zip" -Method Put -InFile "server-build.zip" -Headers $headers
+          }
+          Write-Host "[INFO] Nexus upload completed successfully."
 
-      # 11️⃣ Deployment stage
+      # Deployment stage
       - name: Deploy from Nexus
-        if: ${{ github.event.inputs.deploy_only == 'true' || (github.event.inputs.run_build == 'true' && github.event.inputs.deploy_only != 'true') }}
         shell: powershell
         env:
           NEXUS_URL: ${{ secrets.NEXUS_URL }}
@@ -127,12 +83,10 @@ jobs:
 
           function Get-LatestZip {
               param ([string]$artifactPrefix)
-
               $pair = "$($env:NEXUS_USERNAME):$($env:NEXUS_PASSWORD)"
               $authHeader = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($pair))
               $headers = @{ Authorization = "Basic $authHeader" }
 
-              # Raw repository, no group
               $uri = "$env:NEXUS_URL/service/rest/v1/search/assets?repository=juice-shop-artifacts"
               Write-Host "[INFO] Querying Nexus: $uri"
 
@@ -148,5 +102,46 @@ jobs:
                   return $null
               }
 
-              # Filter by artifact prefix (frontend-build* / server-build*)
-              $filtered = $response.items | Where-Object { $_
+              $filtered = $response.items | Where-Object { $_.name -like "$artifactPrefix*.zip" }
+              if ($filtered.Count -eq 0) {
+                  Write-Host "[WARN] No artifact found matching prefix '$artifactPrefix'"
+                  return $null
+              }
+
+              $latest = $filtered | Sort-Object {[datetime]$_.lastModified} -Descending | Select-Object -First 1
+              return $latest.downloadUrl
+          }
+
+          function Download-And-Extract {
+              param ([string]$url, [string]$destination)
+              if (-Not $url) { Write-Host "[WARN] No URL provided"; return }
+
+              $zipFile = Join-Path $env:TEMP ([System.IO.Path]::GetFileName($url))
+              Write-Host "[INFO] Downloading $url..."
+              Invoke-RestMethod -Uri $url -OutFile $zipFile -Headers @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$env:NEXUS_USERNAME:$env:NEXUS_PASSWORD")) }
+
+              if (-Not (Test-Path $destination)) { New-Item -ItemType Directory -Path $destination -Force | Out-Null }
+              Write-Host "[INFO] Extracting to $destination..."
+              Expand-Archive -Path $zipFile -DestinationPath $destination -Force
+          }
+
+          # Deploy frontend
+          $frontendUrl = Get-LatestZip -artifactPrefix "frontend-build"
+          Download-And-Extract -url $frontendUrl -destination $env:FRONTEND_DEST
+          Write-Host "[INFO] Frontend deployed to $env:FRONTEND_DEST"
+
+          # Deploy server
+          $serverUrl = Get-LatestZip -artifactPrefix "server-build"
+          Download-And-Extract -url $serverUrl -destination $env:SERVER_DEST
+          Write-Host "[INFO] Server deployed to $env:SERVER_DEST"
+
+          # Stop any existing Node server
+          Write-Host "[INFO] Stopping any running Node processes..."
+          Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force
+
+          # Start Node server directly
+          $serverScript = Join-Path $env:SERVER_DEST "build\server.js"
+          Write-Host "[INFO] Starting Node server: $serverScript"
+          Start-Process "node" $serverScript -WindowStyle Hidden
+
+          Write-Host "[INFO] Deployment completed successfully!"
