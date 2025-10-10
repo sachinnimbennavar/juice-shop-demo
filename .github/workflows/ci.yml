@@ -7,21 +7,22 @@ on:
   pull_request:
     branches:
       - main
+  workflow_dispatch:
 
 jobs:
-  build:
+  build-and-deploy:
     runs-on: self-hosted
 
     steps:
-      # 1️⃣ Checkout the repository
+      # 1️⃣ Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2️⃣ Set Node memory for server build
+      # 2️⃣ Set Node memory
       - name: Set Node memory
         run: set NODE_OPTIONS=--max_old_space_size=4096
 
-      # 3️⃣ Cache frontend dependencies and Angular build output
+      # 3️⃣ Cache frontend dependencies
       - name: Cache frontend
         uses: actions/cache@v3
         with:
@@ -32,7 +33,7 @@ jobs:
           key: ${{ runner.os }}-frontend-${{ hashFiles('frontend/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-frontend-
-      
+
       # 4️⃣ Cache server dependencies
       - name: Cache server
         uses: actions/cache@v3
@@ -64,7 +65,7 @@ jobs:
       - name: Build server
         run: npm run build:server
 
-      # 🔟 Upload artifacts to Maven Nexus
+      # 🔟 Nexus Upload Phase to Maven repo
       - name: Upload build artifacts to Maven Nexus
         shell: powershell
         env:
@@ -72,63 +73,42 @@ jobs:
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
-          Write-Host "🧩 Preparing frontend and server zips..."
-          # Frontend zip
-          if (Test-Path "frontend/dist") {
-              Write-Host "Creating frontend-build.zip..."
-              Compress-Archive -Path "frontend/dist/*" -DestinationPath "frontend-build.zip" -Force
-          } else {
-              Write-Host "⚠️ frontend/dist not found, skipping frontend zip."
-          }
-
-          # Server zip
-          Write-Host "Creating server-build.zip..."
-          $serverPaths = @(
-              "app.ts",
-              "server.ts",
-              "package.json",
-              "tsconfig.json",
-              "models",
-              "routes",
-              "lib",
-              "data",
-              "views",
-              "rsn",
-              "config",
-              "build"
-          ) | Where-Object { Test-Path $_ }
-          if ($serverPaths.Count -gt 0) {
-              Compress-Archive -Path $serverPaths -DestinationPath "server-build.zip" -Force
-              Write-Host "✅ Server zip created successfully."
-          } else {
-              Write-Host "⚠️ No backend files found to zip."
-          }
-
-          # Upload to Maven repo with versioning
           $version = $env:GITHUB_RUN_NUMBER
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
 
-          if (Test-Path "frontend-build.zip") {
-              Write-Host "Uploading frontend-build.zip to Maven repo..."
-              Invoke-RestMethod -Uri "${env:NEXUS_URL}/com/example/juiceshop/frontend-build/$version/frontend-build-$version.zip" `
+          # Create frontend zip
+          if (Test-Path "frontend/dist") {
+              Compress-Archive -Path "frontend/dist/*" -DestinationPath "frontend-build-$version.zip" -Force
+          }
+
+          # Create server zip
+          $serverPaths = @(
+              "app.ts","server.ts","package.json","tsconfig.json",
+              "models","routes","lib","data","views","rsn","config","build"
+          ) | Where-Object { Test-Path $_ }
+          if ($serverPaths.Count -gt 0) {
+              Compress-Archive -Path $serverPaths -DestinationPath "server-build-$version.zip" -Force
+          }
+
+          # Upload frontend to Maven repo
+          if (Test-Path "frontend-build-$version.zip") {
+              Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/JuiceShopMavenDemo/com/example/juiceshop/frontend-build/$version/frontend-build-$version.zip" `
                                 -Method Put `
-                                -InFile "frontend-build.zip" `
+                                -InFile "frontend-build-$version.zip" `
                                 -Headers $headers
           }
 
-          if (Test-Path "server-build.zip") {
-              Write-Host "Uploading server-build.zip to Maven repo..."
-              Invoke-RestMethod -Uri "${env:NEXUS_URL}/com/example/juiceshop/server-build/$version/server-build-$version.zip" `
+          # Upload server to Maven repo
+          if (Test-Path "server-build-$version.zip") {
+              Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/JuiceShopMavenDemo/com/example/juiceshop/server-build/$version/server-build-$version.zip" `
                                 -Method Put `
-                                -InFile "server-build.zip" `
+                                -InFile "server-build-$version.zip" `
                                 -Headers $headers
           }
-
-          Write-Host "✅ Maven Nexus upload completed successfully."
 
       # 11️⃣ Deployment stage
-      - name: Deploy latest build from Maven Nexus
+      - name: Deploy from Maven Nexus
         shell: powershell
         env:
           NEXUS_URL: ${{ secrets.NEXUS_URL }}
@@ -141,20 +121,23 @@ jobs:
           Write-Host "[INFO] Starting deployment..."
 
           function Get-LatestArtifactUrl {
-              param([string]$artifactName)
+              param([string]$artifactType)
               $auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
               $headers = @{ Authorization = "Basic $auth" }
-              $uri = "${env:NEXUS_URL}/service/rest/v1/search/assets?repository=JuiceShopMavenDemo&name=$artifactName"
+
+              $uri = "${env:NEXUS_URL}/service/rest/v1/search/assets?repository=JuiceShopMavenDemo&name=$artifactType"
               try {
                   $response = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get
               } catch {
                   Write-Host "[ERROR] Failed to query Nexus: $_"
                   return $null
               }
-              if ($null -eq $response.items -or $response.items.Count -eq 0) {
-                  Write-Host "[WARN] No artifacts found for $artifactName"
+
+              if ($response.items.Count -eq 0) {
+                  Write-Host "[WARN] No $artifactType found in Maven repo"
                   return $null
               }
+
               $latest = $response.items | Sort-Object {[datetime]$_.lastModified} -Descending | Select-Object -First 1
               return $latest.downloadUrl
           }
@@ -163,34 +146,32 @@ jobs:
               param([string]$url, [string]$destination)
               if (-not $url) { Write-Host "[WARN] No URL provided"; return }
               $zipFile = Join-Path $env:TEMP ([System.IO.Path]::GetFileName($url))
-              Write-Host "[INFO] Downloading $url..."
               Invoke-WebRequest -Uri $url -OutFile $zipFile -Headers @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$env:NEXUS_USERNAME:$env:NEXUS_PASSWORD")) }
               if (-not (Test-Path $destination)) { New-Item -ItemType Directory -Path $destination -Force | Out-Null }
-              Write-Host "[INFO] Extracting to $destination..."
               Expand-Archive -Path $zipFile -DestinationPath $destination -Force
           }
 
           # Deploy frontend
-          $frontendUrl = Get-LatestArtifactUrl -artifactName "frontend-build"
+          $frontendUrl = Get-LatestArtifactUrl -artifactType "frontend-build"
           Download-And-Extract -url $frontendUrl -destination $env:FRONTEND_DEST
           Write-Host "[INFO] Frontend deployed to $env:FRONTEND_DEST"
 
           # Deploy server
-          $serverUrl = Get-LatestArtifactUrl -artifactName "server-build"
+          $serverUrl = Get-LatestArtifactUrl -artifactType "server-build"
           Download-And-Extract -url $serverUrl -destination $env:SERVER_DEST
           Write-Host "[INFO] Server deployed to $env:SERVER_DEST"
 
-          # Restart Node server (NSSM)
+          # Restart Node.js server via NSSM
           if (Get-Command nssm -ErrorAction SilentlyContinue) {
               if (Get-Service -Name $env:SERVER_PROCESS_NAME -ErrorAction SilentlyContinue) {
                   Stop-Service -Name $env:SERVER_PROCESS_NAME -Force
                   Start-Sleep -Seconds 5
               }
-              if (-Not (Get-Service -Name $env:SERVER_PROCESS_NAME -ErrorAction SilentlyContinue)) {
+              if (-not (Get-Service -Name $env:SERVER_PROCESS_NAME -ErrorAction SilentlyContinue)) {
                   nssm install $env:SERVER_PROCESS_NAME "C:\Program Files\nodejs\node.exe" "$env:SERVER_DEST\build\server.js"
               }
               Start-Service -Name $env:SERVER_PROCESS_NAME
               Write-Host "[INFO] Deployment completed successfully!"
           } else {
-              Write-Host "[ERROR] NSSM not installed. Start Node server manually."
+              Write-Host "[ERROR] NSSM not installed. Install NSSM or manage Node server manually."
           }
