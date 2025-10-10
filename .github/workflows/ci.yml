@@ -65,7 +65,7 @@ jobs:
       - name: Build server
         run: npm run build:server
 
-      # 🔟 Nexus Upload Phase to Maven repo
+      # 🔟 Upload artifacts to Maven Nexus
       - name: Upload build artifacts to Maven Nexus
         shell: powershell
         env:
@@ -119,45 +119,26 @@ jobs:
           SERVER_PROCESS_NAME: JuiceShopServer
         run: |
           Write-Host "[INFO] Starting deployment..."
-
-          function Get-LatestArtifactUrl {
-              param([string]$artifactType)
-              $auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
-              $headers = @{ Authorization = "Basic $auth" }
-
-              $uri = "${env:NEXUS_URL}/service/rest/v1/search/assets?repository=JuiceShopMavenDemo&name=$artifactType"
-              try {
-                  $response = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get
-              } catch {
-                  Write-Host "[ERROR] Failed to query Nexus: $_"
-                  return $null
-              }
-
-              if ($response.items.Count -eq 0) {
-                  Write-Host "[WARN] No $artifactType found in Maven repo"
-                  return $null
-              }
-
-              $latest = $response.items | Sort-Object {[datetime]$_.lastModified} -Descending | Select-Object -First 1
-              return $latest.downloadUrl
-          }
+          $version = $env:GITHUB_RUN_NUMBER
+          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
+          $headers = @{ Authorization = "Basic $base64Auth" }
 
           function Download-And-Extract {
               param([string]$url, [string]$destination)
               if (-not $url) { Write-Host "[WARN] No URL provided"; return }
               $zipFile = Join-Path $env:TEMP ([System.IO.Path]::GetFileName($url))
-              Invoke-WebRequest -Uri $url -OutFile $zipFile -Headers @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$env:NEXUS_USERNAME:$env:NEXUS_PASSWORD")) }
+              Invoke-WebRequest -Uri $url -OutFile $zipFile -Headers $headers
               if (-not (Test-Path $destination)) { New-Item -ItemType Directory -Path $destination -Force | Out-Null }
               Expand-Archive -Path $zipFile -DestinationPath $destination -Force
           }
 
           # Deploy frontend
-          $frontendUrl = Get-LatestArtifactUrl -artifactType "frontend-build"
+          $frontendUrl = "${env:NEXUS_URL}/repository/JuiceShopMavenDemo/com/example/juiceshop/frontend-build/$version/frontend-build-$version.zip"
           Download-And-Extract -url $frontendUrl -destination $env:FRONTEND_DEST
           Write-Host "[INFO] Frontend deployed to $env:FRONTEND_DEST"
 
           # Deploy server
-          $serverUrl = Get-LatestArtifactUrl -artifactType "server-build"
+          $serverUrl = "${env:NEXUS_URL}/repository/JuiceShopMavenDemo/com/example/juiceshop/server-build/$version/server-build-$version.zip"
           Download-And-Extract -url $serverUrl -destination $env:SERVER_DEST
           Write-Host "[INFO] Server deployed to $env:SERVER_DEST"
 
