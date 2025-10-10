@@ -54,23 +54,23 @@ jobs:
         run: |
           Write-Host "[INFO] Preparing frontend and server zips..."
           if (Test-Path "frontend/dist") {
-              Compress-Archive -Path "frontend/dist/*" -DestinationPath "frontend-build-latest.zip" -Force
+              Compress-Archive -Path "frontend/dist/*" -DestinationPath "frontend-build-76.zip" -Force
           }
           $serverPaths = @("app.ts","server.ts","package.json","tsconfig.json","models","routes","lib","data","views","rsn","config","build") | Where-Object { Test-Path $_ }
           if ($serverPaths.Count -gt 0) {
-              Compress-Archive -Path $serverPaths -DestinationPath "server-build-latest.zip" -Force
+              Compress-Archive -Path $serverPaths -DestinationPath "server-build-76.zip" -Force
           }
 
           $pair = "$($env:NEXUS_USERNAME):$($env:NEXUS_PASSWORD)"
           $authHeader = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($pair))
           $headers = @{ Authorization = "Basic $authHeader" }
 
-          if (Test-Path "frontend-build-latest.zip") {
-              Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/juice-shop-artifacts/frontend-build-latest.zip" -Method Put -InFile "frontend-build-latest.zip" -Headers $headers
+          if (Test-Path "frontend-build-76.zip") {
+              Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/juice-shop-artifacts/frontend-build-76.zip" -Method Put -InFile "frontend-build-76.zip" -Headers $headers
           }
 
-          if (Test-Path "server-build-latest.zip") {
-              Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/juice-shop-artifacts/server-build-latest.zip" -Method Put -InFile "server-build-latest.zip" -Headers $headers
+          if (Test-Path "server-build-76.zip") {
+              Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/juice-shop-artifacts/server-build-76.zip" -Method Put -InFile "server-build-76.zip" -Headers $headers
           }
 
           Write-Host "[INFO] Nexus upload completed successfully."
@@ -94,7 +94,6 @@ jobs:
               $zipFile = Join-Path $env:TEMP ([System.IO.Path]::GetFileName($url))
               Write-Host "[INFO] Downloading $url..."
 
-              # Use UTF8 encoding for credentials to avoid 401
               $pair = "$($env:NEXUS_USERNAME):$($env:NEXUS_PASSWORD)"
               $authHeader = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($pair))
               $headers = @{ Authorization = "Basic $authHeader" }
@@ -106,9 +105,9 @@ jobs:
               Expand-Archive -Path $zipFile -DestinationPath $destination -Force
           }
 
-          # Direct URLs to latest artifacts
-          $frontendUrl = "$env:NEXUS_URL/repository/juice-shop-artifacts/frontend-build-latest.zip"
-          $serverUrl   = "$env:NEXUS_URL/repository/juice-shop-artifacts/server-build-latest.zip"
+          # Use exact artifact filenames
+          $frontendUrl = "$env:NEXUS_URL/repository/juice-shop-artifacts/frontend-build-76.zip"
+          $serverUrl   = "$env:NEXUS_URL/repository/juice-shop-artifacts/server-build-76.zip"
 
           # Deploy frontend
           Download-And-Extract -url $frontendUrl -destination $env:FRONTEND_DEST
