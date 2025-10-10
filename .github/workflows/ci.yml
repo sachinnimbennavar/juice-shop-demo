@@ -61,9 +61,9 @@ jobs:
               Compress-Archive -Path $serverPaths -DestinationPath "server-build-latest.zip" -Force
           }
 
-          # Upload to Nexus (raw repo)
-          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
-          $headers = @{ Authorization = "Basic $base64Auth" }
+          $pair = "$($env:NEXUS_USERNAME):$($env:NEXUS_PASSWORD)"
+          $authHeader = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($pair))
+          $headers = @{ Authorization = "Basic $authHeader" }
 
           if (Test-Path "frontend-build-latest.zip") {
               Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/juice-shop-artifacts/frontend-build-latest.zip" -Method Put -InFile "frontend-build-latest.zip" -Headers $headers
@@ -93,7 +93,13 @@ jobs:
 
               $zipFile = Join-Path $env:TEMP ([System.IO.Path]::GetFileName($url))
               Write-Host "[INFO] Downloading $url..."
-              Invoke-WebRequest -Uri $url -OutFile $zipFile -Headers @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$env:NEXUS_USERNAME:$env:NEXUS_PASSWORD")) }
+
+              # Use UTF8 encoding for credentials to avoid 401
+              $pair = "$($env:NEXUS_USERNAME):$($env:NEXUS_PASSWORD)"
+              $authHeader = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($pair))
+              $headers = @{ Authorization = "Basic $authHeader" }
+
+              Invoke-WebRequest -Uri $url -OutFile $zipFile -Headers $headers -UseBasicParsing
 
               if (-Not (Test-Path $destination)) { New-Item -ItemType Directory -Path $destination -Force | Out-Null }
               Write-Host "[INFO] Extracting to $destination..."
