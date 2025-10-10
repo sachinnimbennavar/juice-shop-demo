@@ -96,6 +96,7 @@ jobs:
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
           Write-Host "[INFO] Preparing frontend and server zips..."
+          
           # Frontend zip
           if (Test-Path "frontend/dist") {
               Write-Host "Creating frontend-build.zip..."
@@ -103,8 +104,8 @@ jobs:
           } else {
               Write-Host "[WARN] frontend/dist not found, skipping frontend zip."
           }
+
           # Server zip
-          Write-Host "Creating server-build.zip..."
           $serverPaths = @(
               "app.ts",
               "server.ts",
@@ -119,16 +120,19 @@ jobs:
               "config",
               "build"
           ) | Where-Object { Test-Path $_ }
+
           if ($serverPaths.Count -gt 0) {
               Compress-Archive -Path $serverPaths -DestinationPath "server-build.zip" -Force
               Write-Host "[INFO] Server zip created successfully."
           } else {
               Write-Host "[WARN] No backend files found to zip."
           }
+
           # Upload to Nexus
           Write-Host "[INFO] Uploading zips to Nexus..."
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
+
           if (Test-Path "frontend-build.zip") {
               Write-Host "Uploading frontend-build.zip..."
               Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/juice-shop/frontend-build-${env:GITHUB_RUN_NUMBER}.zip" `
@@ -136,6 +140,7 @@ jobs:
                                 -InFile "frontend-build.zip" `
                                 -Headers $headers
           }
+
           if (Test-Path "server-build.zip") {
               Write-Host "Uploading server-build.zip..."
               Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/juice-shop/server-build-${env:GITHUB_RUN_NUMBER}.zip" `
@@ -150,7 +155,7 @@ jobs:
         if: ${{ github.event.inputs.deploy_only == 'true' }}
         shell: powershell
         env:
-          NEXUS_URL: http://127.0.0.1:8081
+          NEXUS_URL: ${{ secrets.NEXUS_URL }}
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
           FRONTEND_DEST: C:\inetpub\wwwroot\juice-shop
@@ -158,18 +163,22 @@ jobs:
           SERVER_PROCESS_NAME: JuiceShopServer
         run: |
           Write-Host "[INFO] Starting deployment..."
-          
+
           function Get-LatestZip {
               param ([string]$artifactType)
               $pair = "$($env:NEXUS_USERNAME):$($env:NEXUS_PASSWORD)"
               $authHeader = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($pair))
               $headers = @{ Authorization = "Basic $authHeader" }
+
+              # Correct repository name
               $uri = "$env:NEXUS_URL/service/rest/v1/search/assets?repository=juice-shop-artifacts&name=$artifactType"
               $response = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get
+
               if ($response.items.Count -eq 0) { 
                   Write-Host "[WARN] No $artifactType found in Nexus"
                   return $null 
               }
+
               $latest = $response.items | Sort-Object {[datetime]$_.lastModified} -Descending | Select-Object -First 1
               return $latest.downloadUrl
           }
@@ -177,9 +186,11 @@ jobs:
           function Download-And-Extract {
               param ([string]$url, [string]$destination)
               if (-Not $url) { Write-Host "[WARN] No URL provided"; return }
+
               $zipFile = Join-Path $env:TEMP ([System.IO.Path]::GetFileName($url))
               Write-Host "[INFO] Downloading $url..."
               Invoke-RestMethod -Uri $url -OutFile $zipFile -Headers @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$env:NEXUS_USERNAME:$env:NEXUS_PASSWORD")) }
+
               if (-Not (Test-Path $destination)) { New-Item -ItemType Directory -Path $destination -Force | Out-Null }
               Write-Host "[INFO] Extracting to $destination..."
               Expand-Archive -Path $zipFile -DestinationPath $destination -Force
@@ -195,13 +206,17 @@ jobs:
           Download-And-Extract -url $serverUrl -destination $env:SERVER_DEST
           Write-Host "[INFO] Server deployed to $env:SERVER_DEST"
 
-          # Restart Node.js server via NSSM
-          if (Get-Service -Name $env:SERVER_PROCESS_NAME -ErrorAction SilentlyContinue) {
-              Stop-Service -Name $env:SERVER_PROCESS_NAME -Force
-              Start-Sleep -Seconds 5
+          # Restart Node.js server (NSSM must be installed)
+          if (Get-Command nssm -ErrorAction SilentlyContinue) {
+              if (Get-Service -Name $env:SERVER_PROCESS_NAME -ErrorAction SilentlyContinue) {
+                  Stop-Service -Name $env:SERVER_PROCESS_NAME -Force
+                  Start-Sleep -Seconds 5
+              }
+              if (-Not (Get-Service -Name $env:SERVER_PROCESS_NAME -ErrorAction SilentlyContinue)) {
+                  nssm install $env:SERVER_PROCESS_NAME "C:\Program Files\nodejs\node.exe" "$env:SERVER_DEST\build\server.js"
+              }
+              Start-Service -Name $env:SERVER_PROCESS_NAME
+              Write-Host "[INFO] Deployment completed successfully!"
+          } else {
+              Write-Host "[ERROR] NSSM is not installed on the runner. Install NSSM or use PowerShell native service commands."
           }
-          if (-Not (Get-Service -Name $env:SERVER_PROCESS_NAME -ErrorAction SilentlyContinue)) {
-              nssm install $env:SERVER_PROCESS_NAME "C:\Program Files\nodejs\node.exe" "$env:SERVER_DEST\build\server.js"
-          }
-          Start-Service -Name $env:SERVER_PROCESS_NAME
-          Write-Host "[INFO] Deployment completed successfully!"
