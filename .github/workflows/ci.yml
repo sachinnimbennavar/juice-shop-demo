@@ -1,22 +1,98 @@
-name: Juice Shop Deployment
+name: Juice Shop CI/CD Pipeline
 
 on:
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'Enter the build version to deploy (timestamp)'
-        required: true
-        default: '20251013115336'
+  push:
+    branches:
+      - main
+  workflow_dispatch:  # Manual trigger for deployment only
 
 jobs:
-  deploy:
+  build-and-upload:
+    if: github.event_name == 'push' # Only run on push
     runs-on: self-hosted
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Deploy from Maven Nexus
+      - name: Set Node memory
+        run: set NODE_OPTIONS=--max_old_space_size=4096
+
+      - name: Install frontend dependencies
+        run: |
+          cd frontend
+          npm install --legacy-peer-deps --prefer-offline --no-audit
+          cd ..
+
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm run build -- --configuration production --watch=false --verbose
+          cd ..
+
+      - name: Install server dependencies
+        run: npm install --prefer-offline --no-audit
+
+      - name: Build server
+        run: npm run build:server
+
+      - name: Optional SonarQube analysis (safe skip if not installed)
+        shell: powershell
+        run: |
+          if (Get-Command sonar-scanner -ErrorAction SilentlyContinue) {
+              Write-Host "[INFO] Running SonarQube scanner..."
+              set SONAR_HOST_URL=http://127.0.0.1:9000
+              sonar-scanner
+          } else {
+              Write-Host "[INFO] sonar-scanner not found, skipping SonarQube analysis."
+          }
+
+      - name: Create ZIP artifacts
+        shell: powershell
+        run: |
+          $timestamp = (Get-Date -Format "yyyyMMddHHmmss")
+          Write-Host "[INFO] Creating build artifacts version $timestamp ..."
+
+          Compress-Archive -Path "frontend/dist/*" -DestinationPath "frontend-build-$timestamp.zip" -Force
+          Compress-Archive -Path "server/*" -DestinationPath "server-build-$timestamp.zip" -Force
+
+          echo "VERSION=$timestamp" >> $env:GITHUB_ENV
+          Write-Host "[INFO] Created frontend-build-$timestamp.zip and server-build-$timestamp.zip"
+
+      - name: Upload ZIPs to Maven repo
+        shell: powershell
+        env:
+          NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+        run: |
+          $version = $env:VERSION
+          Write-Host "[INFO] Uploading build version $version to Maven repo..."
+
+          $base64Auth = [System.Convert]::ToBase64String(
+            [System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}")
+          )
+          $headers = @{ Authorization = "Basic $base64Auth" }
+
+          # Upload frontend
+          $frontendUrl = "$($env:NEXUS_URL)/com/example/juiceshop/frontend-build/$version/frontend-build-$version.zip"
+          Invoke-RestMethod -Uri $frontendUrl -Headers $headers -Method PUT -InFile "frontend-build-$version.zip" -ContentType "application/zip"
+
+          # Upload server
+          $serverUrl = "$($env:NEXUS_URL)/com/example/juiceshop/server-build/$version/server-build-$version.zip"
+          Invoke-RestMethod -Uri $serverUrl -Headers $headers -Method PUT -InFile "server-build-$version.zip" -ContentType "application/zip"
+
+          Write-Host "[SUCCESS] Upload completed ✅"
+
+  deploy:
+    if: github.event_name == 'workflow_dispatch' # Manual deploy only
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Deploy build
         shell: powershell
         env:
           NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
@@ -28,13 +104,22 @@ jobs:
         run: |
           Write-Host "[INFO] Starting deployment..."
 
-          $version = "${{ github.event.inputs.version }}"
-          Write-Host "[INFO] Deploying version $version"
-
           $base64Auth = [System.Convert]::ToBase64String(
               [System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}")
           )
           $headers = @{ Authorization = "Basic $base64Auth" }
+
+          # --- Get latest version from Maven metadata ---
+          $metadataUrl = "$($env:NEXUS_URL)/com/example/juiceshop/frontend-build/maven-metadata.xml"
+          try {
+              $metadataXml = Invoke-RestMethod -Uri $metadataUrl -Headers $headers
+              $version = $metadataXml.metadata.versioning.latest
+          } catch {
+              Write-Host "[ERROR] Failed to fetch Maven metadata: $_"
+              exit 1
+          }
+
+          Write-Host "[INFO] Deploying version $version"
 
           function Download-And-Extract {
               param([string]$url, [string]$destination)
@@ -54,28 +139,24 @@ jobs:
               Write-Host "[INFO] Extracted to $destination"
           }
 
-          # --- Build URLs from Maven repo ---
+          # Build URLs
           $frontendUrl = "$($env:NEXUS_URL)/com/example/juiceshop/frontend-build/$version/frontend-build-$version.zip"
           $serverUrl   = "$($env:NEXUS_URL)/com/example/juiceshop/server-build/$version/server-build-$version.zip"
 
-          # --- Deploy frontend ---
+          # Deploy
           Download-And-Extract -url $frontendUrl -destination $env:FRONTEND_DEST
-
-          # --- Deploy server ---
           Download-And-Extract -url $serverUrl -destination $env:SERVER_DEST
 
-          # --- Restart Node.js server ---
+          # Restart Node.js app
           if (Get-Command nssm -ErrorAction SilentlyContinue) {
               Write-Host "[INFO] Restarting service $env:SERVER_PROCESS_NAME ..."
               if (Get-Service -Name $env:SERVER_PROCESS_NAME -ErrorAction SilentlyContinue) {
                   Stop-Service -Name $env:SERVER_PROCESS_NAME -Force
                   Start-Sleep -Seconds 5
               }
-
               if (-not (Get-Service -Name $env:SERVER_PROCESS_NAME -ErrorAction SilentlyContinue)) {
                   nssm install $env:SERVER_PROCESS_NAME "C:\Program Files\nodejs\node.exe" "$env:SERVER_DEST\build\server.js"
               }
-
               Start-Service -Name $env:SERVER_PROCESS_NAME
               Write-Host "[SUCCESS] Deployment completed successfully ✅"
           } else {
