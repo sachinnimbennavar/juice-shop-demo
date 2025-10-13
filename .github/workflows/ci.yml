@@ -112,7 +112,7 @@ jobs:
           }
 
       # 🔟 Deploy stage (manual deploy picks latest version automatically)
-      - name: Deploy from Nexus (latest version)
+      - name: Deploy from Nexus (latest version with auth)
         shell: powershell
         env:
           NEXUS_URL: ${{ secrets.NEXUS_URL }}
@@ -139,9 +139,9 @@ jobs:
           }
 
           function Get-Latest-Version {
-              param([string]$repoUrl)
+              param([string]$repoUrl, [hashtable]$headers)
               Write-Host "[INFO] Fetching file list from $repoUrl ..."
-              $html = Invoke-WebRequest -Uri $repoUrl -UseBasicParsing
+              $html = Invoke-WebRequest -Uri $repoUrl -Headers $headers -UseBasicParsing
               $links = ($html.Links | Where-Object {$_.href -match 'frontend-build-(\d+)\.zip'}) | ForEach-Object {
                   [int]([regex]::Match($_.href, 'frontend-build-(\d+)\.zip').Groups[1].Value)
               }
@@ -153,8 +153,8 @@ jobs:
           $frontendRepoUrl = "${env:NEXUS_URL}/com/example/juiceshop/frontend-build/"
           $serverRepoUrl   = "${env:NEXUS_URL}/com/example/juiceshop/server-build/"
 
-          # Determine latest version automatically
-          $version = Get-Latest-Version -repoUrl $frontendRepoUrl
+          # Detect latest version automatically
+          $version = Get-Latest-Version -repoUrl $frontendRepoUrl -headers $headers
           Write-Host "[INFO] Latest version detected: $version"
 
           # Download & deploy frontend
