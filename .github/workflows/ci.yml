@@ -7,7 +7,7 @@ on:
   pull_request:
     branches:
       - main
-  workflow_dispatch:
+  workflow_dispatch: # Manual trigger
 
 jobs:
   build-and-deploy:
@@ -18,7 +18,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2️⃣ Set Node memory
+      # 2️⃣ Set Node memory limit
       - name: Set Node memory
         run: set NODE_OPTIONS=--max_old_space_size=4096
 
@@ -65,7 +65,7 @@ jobs:
       - name: Build server
         run: npm run build:server
 
-      # 🔟 Upload artifacts to Maven Nexus
+      # 9️⃣ Upload artifacts to Maven Nexus
       - name: Upload build artifacts to Maven Nexus
         shell: powershell
         env:
@@ -73,6 +73,7 @@ jobs:
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
+          Write-Host "[INFO] Packaging and uploading build artifacts..."
           $version = $env:GITHUB_RUN_NUMBER
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
@@ -93,6 +94,7 @@ jobs:
 
           # Upload frontend to Maven repo
           if (Test-Path "frontend-build-$version.zip") {
+              Write-Host "[INFO] Uploading frontend build to Nexus..."
               Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/JuiceShopMavenDemo/com/example/juiceshop/frontend-build/$version/frontend-build-$version.zip" `
                                 -Method Put `
                                 -InFile "frontend-build-$version.zip" `
@@ -101,13 +103,14 @@ jobs:
 
           # Upload server to Maven repo
           if (Test-Path "server-build-$version.zip") {
+              Write-Host "[INFO] Uploading server build to Nexus..."
               Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/JuiceShopMavenDemo/com/example/juiceshop/server-build/$version/server-build-$version.zip" `
                                 -Method Put `
                                 -InFile "server-build-$version.zip" `
                                 -Headers $headers
           }
 
-      # 11️⃣ Deployment stage
+      # 🔟 Deployment stage
       - name: Deploy from Maven Nexus
         shell: powershell
         env:
@@ -127,9 +130,13 @@ jobs:
               param([string]$url, [string]$destination)
               if (-not $url) { Write-Host "[WARN] No URL provided"; return }
               $zipFile = Join-Path $env:TEMP ([System.IO.Path]::GetFileName($url))
+              Write-Host "[INFO] Downloading $url ..."
               Invoke-WebRequest -Uri $url -OutFile $zipFile -Headers $headers
-              if (-not (Test-Path $destination)) { New-Item -ItemType Directory -Path $destination -Force | Out-Null }
+              if (-not (Test-Path $destination)) { 
+                  New-Item -ItemType Directory -Path $destination -Force | Out-Null 
+              }
               Expand-Archive -Path $zipFile -DestinationPath $destination -Force
+              Write-Host "[INFO] Extracted to $destination"
           }
 
           # Deploy frontend
@@ -144,6 +151,7 @@ jobs:
 
           # Restart Node.js server via NSSM
           if (Get-Command nssm -ErrorAction SilentlyContinue) {
+              Write-Host "[INFO] Restarting Node.js service via NSSM..."
               if (Get-Service -Name $env:SERVER_PROCESS_NAME -ErrorAction SilentlyContinue) {
                   Stop-Service -Name $env:SERVER_PROCESS_NAME -Force
                   Start-Sleep -Seconds 5
