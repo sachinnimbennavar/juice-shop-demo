@@ -1,113 +1,67 @@
-name: Juice Shop CI - Upload to Maven Repo
+name: Juice Shop CI
 
 on:
-  push:
-    branches:
-      - main
-  workflow_dispatch:
+  workflow_dispatch:  # allows manual triggering
 
 jobs:
+  # ================= BUILD & UPLOAD =================
   build-and-upload:
+    if: false  # disable automatic run when manually dispatching deploy
     runs-on: self-hosted
 
     steps:
-      # 1️⃣ Checkout code
+      # (Your full build-and-upload steps go here)
+      # Checkout, install dependencies, build, and upload to Nexus
+
+  # ================= DEPLOY =================
+  deploy:
+    runs-on: self-hosted
+    needs: []  # no dependency, runs independently
+    steps:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2️⃣ Setup Node memory
-      - name: Configure Node memory
-        run: set NODE_OPTIONS=--max_old_space_size=4096
-
-      # 3️⃣ Cache frontend dependencies
-      - name: Cache frontend dependencies
-        uses: actions/cache@v3
-        with:
-          path: |
-            frontend/node_modules
-            frontend/dist
-            frontend/.angular
-          key: ${{ runner.os }}-frontend-${{ hashFiles('frontend/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-frontend-
-
-      # 4️⃣ Cache server dependencies
-      - name: Cache server dependencies
-        uses: actions/cache@v3
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-server-${{ hashFiles('package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-server-
-
-      # 5️⃣ Install frontend dependencies
-      - name: Install frontend dependencies
-        run: |
-          cd frontend
-          npm install --legacy-peer-deps --prefer-offline --no-audit
-          cd ..
-
-      # 6️⃣ Build frontend
-      - name: Build frontend
-        run: |
-          cd frontend
-          npm run build -- --configuration production --watch=false --verbose
-          cd ..
-
-      # 7️⃣ Install server dependencies
-      - name: Install server dependencies
-        run: npm install --prefer-offline --no-audit
-
-      # 8️⃣ Build server
-      - name: Build server
-        run: npm run build:server
-
-      # 9️⃣ Upload ZIPs to Maven repo
-      - name: Upload build ZIPs to Nexus Maven repo
+      - name: Set environment variables
         shell: powershell
-        env:
-          NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
-          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
-          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
-          Write-Host "🟢 Packaging and uploading build artifacts to Maven repo..."
+          $env:NEXUS_URL = "http://127.0.0.1:8081/repository/JuiceShopMavenDemo"
+          $env:NEXUS_USERNAME = "${{ secrets.NEXUS_USERNAME }}"
+          $env:NEXUS_PASSWORD = "${{ secrets.NEXUS_PASSWORD }}"
 
-          # Create a timestamp-based version
-          $timestamp = (Get-Date -Format "yyyyMMddHHmmss")
-
-          # Prepare Basic Auth header
-          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
+      - name: Deploy latest frontend build
+        shell: powershell
+        run: |
+          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("$($env:NEXUS_USERNAME):$($env:NEXUS_PASSWORD)"))
           $headers = @{ Authorization = "Basic $base64Auth" }
 
-          # ===== FRONTEND =====
-          if (Test-Path "frontend/dist") {
-              Write-Host "[INFO] Packaging frontend build..."
-              Compress-Archive -Path "frontend/dist/*" -DestinationPath "frontend-build-$timestamp.zip" -Force
+          # Use the known latest version (replace if dynamic fetching needed)
+          $latestFrontendVersion = "20251013115336"
+          $frontendUrl = "$($env:NEXUS_URL)/com/example/juiceshop/frontend-build/$latestFrontendVersion/frontend-build-$latestFrontendVersion.zip"
+          Write-Host "[INFO] Downloading frontend ZIP from $frontendUrl"
+          Invoke-WebRequest -Uri $frontendUrl -OutFile "frontend-build.zip" -Headers $headers
 
-              $frontendUrl = "${env:NEXUS_URL}/com/example/juiceshop/frontend-build/$timestamp/frontend-build-$timestamp.zip"
-              Write-Host "[INFO] Uploading frontend ZIP → $frontendUrl"
-              Invoke-RestMethod -Uri $frontendUrl -Method Put -InFile "frontend-build-$timestamp.zip" -Headers $headers
-              Write-Host "[SUCCESS] Frontend uploaded successfully."
+          # Extract
+          if (Test-Path "frontend-build.zip") {
+              Expand-Archive -Path "frontend-build.zip" -DestinationPath "C:\inetpub\wwwroot\juice-shop-frontend" -Force
+              Write-Host "[SUCCESS] Frontend deployed."
           } else {
-              Write-Host "[WARN] frontend/dist not found, skipping frontend upload."
+              Write-Host "[WARN] Frontend ZIP not found, skipping extraction."
           }
 
-          # ===== SERVER =====
-          $serverPaths = @(
-              "app.ts","server.ts","package.json","tsconfig.json",
-              "models","routes","lib","data","views","rsn","config","build"
-          ) | Where-Object { Test-Path $_ }
+      - name: Deploy latest server build
+        shell: powershell
+        run: |
+          $latestServerVersion = "20251013115336"
+          $serverUrl = "$($env:NEXUS_URL)/com/example/juiceshop/server-build/$latestServerVersion/server-build-$latestServerVersion.zip"
+          Write-Host "[INFO] Downloading server ZIP from $serverUrl"
+          Invoke-WebRequest -Uri $serverUrl -OutFile "server-build.zip" -Headers $headers
 
-          if ($serverPaths.Count -gt 0) {
-              Write-Host "[INFO] Packaging server build..."
-              Compress-Archive -Path $serverPaths -DestinationPath "server-build-$timestamp.zip" -Force
-
-              $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/server-build/$timestamp/server-build-$timestamp.zip"
-              Write-Host "[INFO] Uploading server ZIP → $serverUrl"
-              Invoke-RestMethod -Uri $serverUrl -Method Put -InFile "server-build-$timestamp.zip" -Headers $headers
-              Write-Host "[SUCCESS] Server uploaded successfully."
+          if (Test-Path "server-build.zip") {
+              Expand-Archive -Path "server-build.zip" -DestinationPath "C:\JuiceShopServer" -Force
+              Write-Host "[SUCCESS] Server deployed."
           } else {
-              Write-Host "[WARN] No server files found, skipping server upload."
+              Write-Host "[WARN] Server ZIP not found, skipping extraction."
           }
 
-          Write-Host "✅ All available builds uploaded to Maven repo successfully!"
+      - name: Deployment complete
+        run: Write-Host "✅ Deployment finished successfully!"
