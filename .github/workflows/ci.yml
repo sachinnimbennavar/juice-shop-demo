@@ -1,121 +1,11 @@
-name: Juice Shop CI
+name: Juice Shop Deployment
 
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
-  workflow_dispatch:  # ✅ Allows manual trigger (for deploy stage)
+  workflow_dispatch:  # 👈 Manual trigger only
 
 jobs:
-  build-and-upload:
-    name: Build and Upload Artifacts
-    runs-on: self-hosted
-
-    steps:
-      # 1️⃣ Checkout repository
-      - name: Checkout repository
-        uses: actions/checkout@v3
-
-      # 2️⃣ Set Node memory
-      - name: Set Node memory
-        run: set NODE_OPTIONS=--max_old_space_size=4096
-
-      # 3️⃣ Cache frontend dependencies
-      - name: Cache frontend
-        uses: actions/cache@v3
-        with:
-          path: |
-            frontend/node_modules
-            frontend/dist
-            frontend/.angular
-          key: ${{ runner.os }}-frontend-${{ hashFiles('frontend/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-frontend-
-
-      # 4️⃣ Cache server dependencies
-      - name: Cache server
-        uses: actions/cache@v3
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-server-${{ hashFiles('package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-server-
-
-      # 5️⃣ Install frontend dependencies
-      - name: Install frontend dependencies
-        run: |
-          cd frontend
-          npm install --legacy-peer-deps --prefer-offline --no-audit
-          cd ..
-
-      # 6️⃣ Build frontend
-      - name: Build frontend
-        run: |
-          cd frontend
-          npm run build -- --configuration production --watch=false --verbose
-          cd ..
-
-      # 7️⃣ Install server dependencies
-      - name: Install server dependencies
-        run: npm install --prefer-offline --no-audit
-
-      # 8️⃣ Build server
-      - name: Build server
-        run: npm run build:server
-
-      # 9️⃣ Upload artifacts to Maven Nexus
-      - name: Upload build artifacts to Maven Nexus
-        shell: powershell
-        env:
-          NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
-          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
-          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
-        run: |
-          $timestamp = (Get-Date).ToString("yyyyMMddHHmmss")
-          Write-Host "[INFO] Uploading build version: $timestamp"
-
-          $base64Auth = [System.Convert]::ToBase64String(
-              [System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}")
-          )
-          $headers = @{ Authorization = "Basic $base64Auth" }
-
-          # Create frontend zip
-          if (Test-Path "frontend/dist") {
-              Compress-Archive -Path "frontend/dist/*" -DestinationPath "frontend-build-$timestamp.zip" -Force
-          }
-
-          # Create server zip
-          $serverPaths = @(
-              "app.ts","server.ts","package.json","tsconfig.json",
-              "models","routes","lib","data","views","rsn","config","build"
-          ) | Where-Object { Test-Path $_ }
-          if ($serverPaths.Count -gt 0) {
-              Compress-Archive -Path $serverPaths -DestinationPath "server-build-$timestamp.zip" -Force
-          }
-
-          # Upload frontend zip
-          if (Test-Path "frontend-build-$timestamp.zip") {
-              $frontendUrl = "$($env:NEXUS_URL)/com/example/juiceshop/frontend-build/$timestamp/frontend-build-$timestamp.zip"
-              Write-Host "[INFO] Uploading frontend to $frontendUrl"
-              Invoke-RestMethod -Uri $frontendUrl -Method Put -InFile "frontend-build-$timestamp.zip" -Headers $headers
-          }
-
-          # Upload server zip
-          if (Test-Path "server-build-$timestamp.zip") {
-              $serverUrl = "$($env:NEXUS_URL)/com/example/juiceshop/server-build/$timestamp/server-build-$timestamp.zip"
-              Write-Host "[INFO] Uploading server to $serverUrl"
-              Invoke-RestMethod -Uri $serverUrl -Method Put -InFile "server-build-$timestamp.zip" -Headers $headers
-          }
-
   deploy:
-    name: Deploy Latest Build
     runs-on: self-hosted
-    needs: []  # ⚠️ Keeps deploy independent — can run manually any time
-
-    if: github.event_name == 'workflow_dispatch'  # ✅ Only runs on manual trigger
 
     steps:
       - name: Checkout repository
@@ -138,7 +28,6 @@ jobs:
           )
           $headers = @{ Authorization = "Basic $base64Auth" }
 
-          # --- Function: Get latest version folder ---
           function Get-LatestVersion {
               param([string]$artifactPath)
               $url = "$($env:NEXUS_URL)/$artifactPath/"
@@ -159,7 +48,6 @@ jobs:
               return ($matches | ForEach-Object { $_.Groups[1].Value } | Sort-Object | Select-Object -Last 1)
           }
 
-          # --- Function: Download and extract zip ---
           function Download-And-Extract {
               param([string]$url, [string]$destination)
               Write-Host "[INFO] Downloading $url ..."
@@ -178,7 +66,7 @@ jobs:
               Write-Host "[INFO] Extracted to $destination"
           }
 
-          # --- Get latest versions ---
+          # --- Get latest builds ---
           $latestFrontend = Get-LatestVersion -artifactPath "com/example/juiceshop/frontend-build"
           $latestServer = Get-LatestVersion -artifactPath "com/example/juiceshop/server-build"
 
@@ -188,13 +76,10 @@ jobs:
           $frontendUrl = "$($env:NEXUS_URL)/com/example/juiceshop/frontend-build/$latestFrontend/frontend-build-$latestFrontend.zip"
           $serverUrl   = "$($env:NEXUS_URL)/com/example/juiceshop/server-build/$latestServer/server-build-$latestServer.zip"
 
-          # --- Deploy frontend ---
           Download-And-Extract -url $frontendUrl -destination $env:FRONTEND_DEST
-
-          # --- Deploy server ---
           Download-And-Extract -url $serverUrl -destination $env:SERVER_DEST
 
-          # --- Restart Node.js server ---
+          # Restart Node.js app with NSSM
           if (Get-Command nssm -ErrorAction SilentlyContinue) {
               Write-Host "[INFO] Restarting service $env:SERVER_PROCESS_NAME ..."
               if (Get-Service -Name $env:SERVER_PROCESS_NAME -ErrorAction SilentlyContinue) {
@@ -207,7 +92,7 @@ jobs:
               }
 
               Start-Service -Name $env:SERVER_PROCESS_NAME
-              Write-Host "[INFO] Deployment completed successfully!"
+              Write-Host "[SUCCESS] Deployment completed successfully ✅"
           } else {
-              Write-Host "[WARN] NSSM not installed. Start the Node server manually."
+              Write-Host "[WARN] NSSM not installed. Start Node manually."
           }
