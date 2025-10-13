@@ -1,75 +1,113 @@
-name: Juice Shop CI - Deploy
+name: Juice Shop CI - Upload to Maven Repo
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
-  deploy:
+  build-and-upload:
     runs-on: self-hosted
 
     steps:
-      # 1️⃣ Checkout code (optional)
+      # 1️⃣ Checkout code
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2️⃣ Set environment variables
-      - name: Set environment variables
-        shell: powershell
-        run: |
-          $env:NEXUS_URL = "http://127.0.0.1:8081/repository/JuiceShopMavenDemo"
-          $env:NEXUS_USERNAME = "${{ secrets.NEXUS_USERNAME }}"
-          $env:NEXUS_PASSWORD = "${{ secrets.NEXUS_PASSWORD }}"
+      # 2️⃣ Setup Node memory
+      - name: Configure Node memory
+        run: set NODE_OPTIONS=--max_old_space_size=4096
 
-      # 3️⃣ Deploy frontend
-      - name: Download and deploy latest frontend build
-        shell: powershell
+      # 3️⃣ Cache frontend dependencies
+      - name: Cache frontend dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            frontend/node_modules
+            frontend/dist
+            frontend/.angular
+          key: ${{ runner.os }}-frontend-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-frontend-
+
+      # 4️⃣ Cache server dependencies
+      - name: Cache server dependencies
+        uses: actions/cache@v3
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-server-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-server-
+
+      # 5️⃣ Install frontend dependencies
+      - name: Install frontend dependencies
         run: |
+          cd frontend
+          npm install --legacy-peer-deps --prefer-offline --no-audit
+          cd ..
+
+      # 6️⃣ Build frontend
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm run build -- --configuration production --watch=false --verbose
+          cd ..
+
+      # 7️⃣ Install server dependencies
+      - name: Install server dependencies
+        run: npm install --prefer-offline --no-audit
+
+      # 8️⃣ Build server
+      - name: Build server
+        run: npm run build:server
+
+      # 9️⃣ Upload ZIPs to Maven repo
+      - name: Upload build ZIPs to Nexus Maven repo
+        shell: powershell
+        env:
+          NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+        run: |
+          Write-Host "🟢 Packaging and uploading build artifacts to Maven repo..."
+
+          # Create a timestamp-based version
+          $timestamp = (Get-Date -Format "yyyyMMddHHmmss")
+
+          # Prepare Basic Auth header
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
 
-          # Get the list of versions
-          $versionsHtml = Invoke-RestMethod -Uri "${env:NEXUS_URL}/com/example/juiceshop/frontend-build/" -Headers $headers
+          # ===== FRONTEND =====
+          if (Test-Path "frontend/dist") {
+              Write-Host "[INFO] Packaging frontend build..."
+              Compress-Archive -Path "frontend/dist/*" -DestinationPath "frontend-build-$timestamp.zip" -Force
 
-          # Parse folder names (timestamps)
-          $latestVersion = ($versionsHtml.Links | Where-Object { $_ -match '^\d+$' } | Sort-Object -Descending)[0]
-          Write-Host "[INFO] Latest frontend version: $latestVersion"
-
-          $frontendUrl = "${env:NEXUS_URL}/com/example/juiceshop/frontend-build/$latestVersion/frontend-build-$latestVersion.zip"
-          Write-Host "[INFO] Downloading frontend ZIP from $frontendUrl"
-
-          Invoke-WebRequest -Uri $frontendUrl -OutFile "frontend-build.zip" -Headers $headers
-
-          # Extract ZIP
-          if (Test-Path "frontend-build.zip") {
-              Write-Host "[INFO] Extracting frontend ZIP..."
-              Expand-Archive -Path "frontend-build.zip" -DestinationPath "C:\inetpub\wwwroot\juice-shop-frontend" -Force
-              Write-Host "[SUCCESS] Frontend deployed to C:\inetpub\wwwroot\juice-shop-frontend"
+              $frontendUrl = "${env:NEXUS_URL}/com/example/juiceshop/frontend-build/$timestamp/frontend-build-$timestamp.zip"
+              Write-Host "[INFO] Uploading frontend ZIP → $frontendUrl"
+              Invoke-RestMethod -Uri $frontendUrl -Method Put -InFile "frontend-build-$timestamp.zip" -Headers $headers
+              Write-Host "[SUCCESS] Frontend uploaded successfully."
           } else {
-              Write-Host "[WARN] Frontend ZIP not found, skipping extraction."
+              Write-Host "[WARN] frontend/dist not found, skipping frontend upload."
           }
 
-      # 4️⃣ Deploy server
-      - name: Download and deploy latest server build
-        shell: powershell
-        run: |
-          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
-          $headers = @{ Authorization = "Basic $base64Auth" }
+          # ===== SERVER =====
+          $serverPaths = @(
+              "app.ts","server.ts","package.json","tsconfig.json",
+              "models","routes","lib","data","views","rsn","config","build"
+          ) | Where-Object { Test-Path $_ }
 
-          $versionsHtml = Invoke-RestMethod -Uri "${env:NEXUS_URL}/com/example/juiceshop/server-build/" -Headers $headers
-          $latestVersion = ($versionsHtml.Links | Where-Object { $_ -match '^\d+$' } | Sort-Object -Descending)[0]
-          Write-Host "[INFO] Latest server version: $latestVersion"
+          if ($serverPaths.Count -gt 0) {
+              Write-Host "[INFO] Packaging server build..."
+              Compress-Archive -Path $serverPaths -DestinationPath "server-build-$timestamp.zip" -Force
 
-          $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/server-build/$latestVersion/server-build-$latestVersion.zip"
-          Write-Host "[INFO] Downloading server ZIP from $serverUrl"
-
-          Invoke-WebRequest -Uri $serverUrl -OutFile "server-build.zip" -Headers $headers
-
-          if (Test-Path "server-build.zip") {
-              Expand-Archive -Path "server-build.zip" -DestinationPath "C:\JuiceShopServer" -Force
-              Write-Host "[SUCCESS] Server deployed to C:\JuiceShopServer"
+              $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/server-build/$timestamp/server-build-$timestamp.zip"
+              Write-Host "[INFO] Uploading server ZIP → $serverUrl"
+              Invoke-RestMethod -Uri $serverUrl -Method Put -InFile "server-build-$timestamp.zip" -Headers $headers
+              Write-Host "[SUCCESS] Server uploaded successfully."
           } else {
-              Write-Host "[WARN] Server ZIP not found, skipping extraction."
+              Write-Host "[WARN] No server files found, skipping server upload."
           }
 
-      - name: Deployment complete
-        run: Write-Host "✅ All latest builds deployed successfully!"
+          Write-Host "✅ All available builds uploaded to Maven repo successfully!"
