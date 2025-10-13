@@ -7,7 +7,11 @@ on:
   pull_request:
     branches:
       - main
-  workflow_dispatch: # enables manual run for deploy only
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number to deploy (optional, for manual deploy)'
+        required: false
 
 jobs:
   build-and-deploy:
@@ -71,12 +75,12 @@ jobs:
         if: ${{ github.event_name != 'workflow_dispatch' }}
         run: npm run build:server
 
-      # 9️⃣ Upload artifacts to Nexus (only during push/PR)
-      - name: Upload build artifacts to Maven Nexus
+      # 9️⃣ Upload artifacts to Nexus (only on push/PR)
+      - name: Upload build artifacts to Nexus
         if: ${{ github.event_name != 'workflow_dispatch' }}
         shell: powershell
         env:
-          NEXUS_URL: ${{ secrets.NEXUS_URL }}
+          NEXUS_URL: ${{ secrets.NEXUS_URL }}       # http://127.0.0.1:8081/repository/juice-shop-artifacts
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
@@ -85,10 +89,12 @@ jobs:
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
 
+          # Frontend ZIP
           if (Test-Path "frontend/dist") {
               Compress-Archive -Path "frontend/dist/*" -DestinationPath "frontend-build-$version.zip" -Force
           }
 
+          # Server ZIP
           $serverPaths = @(
               "app.ts","server.ts","package.json","tsconfig.json",
               "models","routes","lib","data","views","rsn","config","build"
@@ -97,20 +103,20 @@ jobs:
               Compress-Archive -Path $serverPaths -DestinationPath "server-build-$version.zip" -Force
           }
 
+          # Upload frontend
           if (Test-Path "frontend-build-$version.zip") {
-              Write-Host "[INFO] Uploading frontend build to Nexus..."
-              Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/JuiceShopMavenDemo/com/example/juiceshop/frontend-build/$version/frontend-build-$version.zip" `
+              Invoke-RestMethod -Uri "${env:NEXUS_URL}/com/example/juiceshop/frontend-build/$version/frontend-build-$version.zip" `
                                 -Method Put -InFile "frontend-build-$version.zip" -Headers $headers
           }
 
+          # Upload server
           if (Test-Path "server-build-$version.zip") {
-              Write-Host "[INFO] Uploading server build to Nexus..."
-              Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/JuiceShopMavenDemo/com/example/juiceshop/server-build/$version/server-build-$version.zip" `
+              Invoke-RestMethod -Uri "${env:NEXUS_URL}/com/example/juiceshop/server-build/$version/server-build-$version.zip" `
                                 -Method Put -InFile "server-build-$version.zip" -Headers $headers
           }
 
       # 🔟 Deployment stage (always available)
-      - name: Deploy from Maven Nexus
+      - name: Deploy from Nexus
         shell: powershell
         env:
           NEXUS_URL: ${{ secrets.NEXUS_URL }}
@@ -121,11 +127,13 @@ jobs:
           SERVER_PROCESS_NAME: JuiceShopServer
         run: |
           Write-Host "[INFO] Starting deployment..."
-          $version = Read-Host "Enter version number to deploy (e.g., 123)" 
-          if (-not $version) { 
-              $version = $env:GITHUB_RUN_NUMBER 
-              Write-Host "[INFO] Using current run number $version"
+          # Use input version if provided, otherwise current run number
+          if ($env:GITHUB_EVENT_NAME -eq "workflow_dispatch" -and $env:GITHUB_EVENT_INPUTS_version) {
+              $version = $env:GITHUB_EVENT_INPUTS_version
+          } else {
+              $version = $env:GITHUB_RUN_NUMBER
           }
+          Write-Host "[INFO] Deploying version $version"
 
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
@@ -144,18 +152,15 @@ jobs:
           }
 
           # Deploy frontend
-          $frontendUrl = "${env:NEXUS_URL}/repository/JuiceShopMavenDemo/com/example/juiceshop/frontend-build/$version/frontend-build-$version.zip"
+          $frontendUrl = "${env:NEXUS_URL}/com/example/juiceshop/frontend-build/$version/frontend-build-$version.zip"
           Download-And-Extract -url $frontendUrl -destination $env:FRONTEND_DEST
-          Write-Host "[INFO] Frontend deployed to $env:FRONTEND_DEST"
 
           # Deploy server
-          $serverUrl = "${env:NEXUS_URL}/repository/JuiceShopMavenDemo/com/example/juiceshop/server-build/$version/server-build-$version.zip"
+          $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/server-build/$version/server-build-$version.zip"
           Download-And-Extract -url $serverUrl -destination $env:SERVER_DEST
-          Write-Host "[INFO] Server deployed to $env:SERVER_DEST"
 
-          # Restart Node.js server via NSSM
+          # Restart Node server via NSSM
           if (Get-Command nssm -ErrorAction SilentlyContinue) {
-              Write-Host "[INFO] Restarting Node.js service via NSSM..."
               if (Get-Service -Name $env:SERVER_PROCESS_NAME -ErrorAction SilentlyContinue) {
                   Stop-Service -Name $env:SERVER_PROCESS_NAME -Force
                   Start-Sleep -Seconds 5
