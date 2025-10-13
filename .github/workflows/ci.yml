@@ -1,4 +1,4 @@
-name: Juice Shop CI
+name: Juice Shop CI + Manual Deploy
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
   pull_request:
     branches:
       - main
-  workflow_dispatch: # Manual trigger
+  workflow_dispatch: # enables manual run for deploy only
 
 jobs:
   build-and-deploy:
@@ -18,12 +18,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2️⃣ Set Node memory limit
+      # 2️⃣ Set Node memory
       - name: Set Node memory
         run: set NODE_OPTIONS=--max_old_space_size=4096
 
       # 3️⃣ Cache frontend dependencies
       - name: Cache frontend
+        if: ${{ github.event_name != 'workflow_dispatch' }}
         uses: actions/cache@v3
         with:
           path: |
@@ -36,6 +37,7 @@ jobs:
 
       # 4️⃣ Cache server dependencies
       - name: Cache server
+        if: ${{ github.event_name != 'workflow_dispatch' }}
         uses: actions/cache@v3
         with:
           path: node_modules
@@ -45,6 +47,7 @@ jobs:
 
       # 5️⃣ Install frontend dependencies
       - name: Install frontend dependencies
+        if: ${{ github.event_name != 'workflow_dispatch' }}
         run: |
           cd frontend
           npm install --legacy-peer-deps --prefer-offline --no-audit
@@ -52,6 +55,7 @@ jobs:
 
       # 6️⃣ Build frontend
       - name: Build frontend
+        if: ${{ github.event_name != 'workflow_dispatch' }}
         run: |
           cd frontend
           npm run build -- --configuration production --watch=false --verbose
@@ -59,14 +63,17 @@ jobs:
 
       # 7️⃣ Install server dependencies
       - name: Install server dependencies
+        if: ${{ github.event_name != 'workflow_dispatch' }}
         run: npm install --prefer-offline --no-audit
 
       # 8️⃣ Build server
       - name: Build server
+        if: ${{ github.event_name != 'workflow_dispatch' }}
         run: npm run build:server
 
-      # 9️⃣ Upload artifacts to Maven Nexus
+      # 9️⃣ Upload artifacts to Nexus (only during push/PR)
       - name: Upload build artifacts to Maven Nexus
+        if: ${{ github.event_name != 'workflow_dispatch' }}
         shell: powershell
         env:
           NEXUS_URL: ${{ secrets.NEXUS_URL }}
@@ -78,12 +85,10 @@ jobs:
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
 
-          # Create frontend zip
           if (Test-Path "frontend/dist") {
               Compress-Archive -Path "frontend/dist/*" -DestinationPath "frontend-build-$version.zip" -Force
           }
 
-          # Create server zip
           $serverPaths = @(
               "app.ts","server.ts","package.json","tsconfig.json",
               "models","routes","lib","data","views","rsn","config","build"
@@ -92,25 +97,19 @@ jobs:
               Compress-Archive -Path $serverPaths -DestinationPath "server-build-$version.zip" -Force
           }
 
-          # Upload frontend to Maven repo
           if (Test-Path "frontend-build-$version.zip") {
               Write-Host "[INFO] Uploading frontend build to Nexus..."
               Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/JuiceShopMavenDemo/com/example/juiceshop/frontend-build/$version/frontend-build-$version.zip" `
-                                -Method Put `
-                                -InFile "frontend-build-$version.zip" `
-                                -Headers $headers
+                                -Method Put -InFile "frontend-build-$version.zip" -Headers $headers
           }
 
-          # Upload server to Maven repo
           if (Test-Path "server-build-$version.zip") {
               Write-Host "[INFO] Uploading server build to Nexus..."
               Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/JuiceShopMavenDemo/com/example/juiceshop/server-build/$version/server-build-$version.zip" `
-                                -Method Put `
-                                -InFile "server-build-$version.zip" `
-                                -Headers $headers
+                                -Method Put -InFile "server-build-$version.zip" -Headers $headers
           }
 
-      # 🔟 Deployment stage
+      # 🔟 Deployment stage (always available)
       - name: Deploy from Maven Nexus
         shell: powershell
         env:
@@ -122,7 +121,12 @@ jobs:
           SERVER_PROCESS_NAME: JuiceShopServer
         run: |
           Write-Host "[INFO] Starting deployment..."
-          $version = $env:GITHUB_RUN_NUMBER
+          $version = Read-Host "Enter version number to deploy (e.g., 123)" 
+          if (-not $version) { 
+              $version = $env:GITHUB_RUN_NUMBER 
+              Write-Host "[INFO] Using current run number $version"
+          }
+
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
 
