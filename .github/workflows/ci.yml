@@ -1,43 +1,99 @@
-name: Juice Shop Deploy
+name: Juice Shop CI/CD
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
-  deploy:
+  build-upload-deploy:
     runs-on: self-hosted
 
+    env:
+      NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
+      FRONTEND_PATH: C:\inetpub\wwwroot\juice-shop
+      SERVER_PATH: C:\JuiceShopServer
+      NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+      NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+      BUILD_VERSION: ${{ github.run_id }} # unique per CI run
+
     steps:
-      - name: Deploy latest frontend & server build
+      # 1️⃣ Checkout code
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # 2️⃣ Setup Node memory
+      - name: Configure Node memory
+        run: set NODE_OPTIONS=--max_old_space_size=4096
+
+      # 3️⃣ Install frontend dependencies
+      - name: Install frontend dependencies
+        run: |
+          cd frontend
+          npm install --legacy-peer-deps --prefer-offline --no-audit
+          cd ..
+
+      # 4️⃣ Build frontend
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm run build -- --configuration production --watch=false --verbose
+          cd ..
+
+      # 5️⃣ Install server dependencies
+      - name: Install server dependencies
+        run: npm install --prefer-offline --no-audit
+
+      # 6️⃣ Build server
+      - name: Build server
+        run: npm run build:server
+
+      # 7️⃣ Package frontend & server
+      - name: Package artifacts
+        run: |
+          Compress-Archive -Path frontend/dist/* -DestinationPath frontend-build-$BUILD_VERSION.zip -Force
+          Compress-Archive -Path app.ts,server.ts,package.json,tsconfig.json,models,routes,lib,data,views,rsn,config,build -DestinationPath server-build-$BUILD_VERSION.zip -Force
+
+      # 8️⃣ Upload frontend (Maven-compliant)
+      - name: Upload frontend build to Nexus
+        run: |
+          mvn deploy:deploy-file `
+            -DgroupId=com.example.juiceshop `
+            -DartifactId=frontend-build `
+            -Dversion=$BUILD_VERSION `
+            -Dpackaging=zip `
+            -Dfile=frontend-build-$BUILD_VERSION.zip `
+            -DrepositoryId=nexus `
+            -Durl=$NEXUS_URL
+        shell: bash
+
+      # 9️⃣ Upload server (Maven-compliant)
+      - name: Upload server build to Nexus
+        run: |
+          mvn deploy:deploy-file `
+            -DgroupId=com.example.juiceshop `
+            -DartifactId=server-build `
+            -Dversion=$BUILD_VERSION `
+            -Dpackaging=zip `
+            -Dfile=server-build-$BUILD_VERSION.zip `
+            -DrepositoryId=nexus `
+            -Durl=$NEXUS_URL
+        shell: bash
+
+      # 🔟 Deploy latest builds
+      - name: Deploy latest builds
         shell: powershell
-        env:
-          NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
-          FRONTEND_PATH: C:\inetpub\wwwroot\juice-shop
-          SERVER_PATH: C:\JuiceShopServer
-          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
-          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
           Write-Host "[INFO] Starting deployment..."
-
           $base64Auth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
 
           function Get-LatestVersion {
               param ($artifactId)
               $metadataUrl = "$env:NEXUS_URL/com/example/juiceshop/${artifactId}/maven-metadata.xml"
-              Write-Host "[INFO] Fetching maven-metadata.xml from $metadataUrl ..."
-
-              try {
-                  $metadata = Invoke-RestMethod -Uri $metadataUrl -Headers $headers
-              } catch {
-                  $errMsg = $_.Exception.Message
-                  Write-Host "[ERROR] Failed to fetch metadata for ${artifactId}: ${errMsg}"
-                  exit 1
-              }
-
-              $latestVersion = $metadata.metadata.versioning.latest
-              Write-Host "[INFO] Latest ${artifactId} version: ${latestVersion}"
-              return $latestVersion
+              $metadata = Invoke-RestMethod -Uri $metadataUrl -Headers $headers
+              return $metadata.metadata.versioning.latest
           }
 
           function Deploy-Zip {
@@ -46,16 +102,8 @@ jobs:
               $zipUrl = "$env:NEXUS_URL/com/example/juiceshop/${artifactId}/${latestVersion}/${artifactId}-${latestVersion}.zip"
               $tempZip = "$env:TEMP/${artifactId}.zip"
 
-              Write-Host "[INFO] Downloading ${artifactId} from ${zipUrl} ..."
-              try {
-                  Invoke-WebRequest -Uri $zipUrl -OutFile $tempZip -Headers $headers
-              } catch {
-                  $errMsg = $_.Exception.Message
-                  Write-Host "[ERROR] Failed to download ${artifactId}: ${errMsg}"
-                  exit 1
-              }
+              Invoke-WebRequest -Uri $zipUrl -OutFile $tempZip -Headers $headers
 
-              Write-Host "[INFO] Extracting ${artifactId} to ${deployPath} ..."
               if (Test-Path $deployPath) { Remove-Item -Recurse -Force $deployPath }
               Expand-Archive -Path $tempZip -DestinationPath $deployPath
               Remove-Item $tempZip
@@ -65,5 +113,4 @@ jobs:
 
           Deploy-Zip -artifactId "frontend-build" -deployPath $env:FRONTEND_PATH
           Deploy-Zip -artifactId "server-build" -deployPath $env:SERVER_PATH
-
           Write-Host "`n✅ Deployment completed successfully!"
