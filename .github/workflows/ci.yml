@@ -8,11 +8,11 @@ jobs:
     runs-on: self-hosted
 
     steps:
-      # 1️⃣ Checkout repository (needed to access frontend-build and server files)
+      # 1️⃣ Checkout repository (needed to access frontend and server files)
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2️⃣ Upload build ZIPs to Maven repo
+      # 2️⃣ Upload build ZIPs to Nexus Maven repo
       - name: Upload build ZIPs to Nexus Maven repo
         shell: powershell
         env:
@@ -29,7 +29,8 @@ jobs:
 
           # ===== FRONTEND =====
           $frontendPaths = @(
-              "frontend-build"
+              "app.ts","server.ts","package.json","tsconfig.json",
+              "models","routes","lib","data","views","rsn","config","build"
           ) | Where-Object { Test-Path $_ }
 
           if ($frontendPaths.Count -gt 0) {
@@ -41,9 +42,7 @@ jobs:
               Invoke-RestMethod -Uri $frontendUrl -Method Put -InFile "frontend-build-$timestamp.zip" -Headers $headers -ContentType "application/zip"
               Write-Host "[SUCCESS] Frontend uploaded successfully."
           } else {
-              Write-Host "[WARN] frontend-build folder not found, skipping frontend upload."
-              Write-Host "[DEBUG] Listing current directory for troubleshooting:"
-              Get-ChildItem -Recurse -Depth 2 | Select-Object FullName
+              Write-Host "[WARN] No frontend files found, skipping frontend upload."
           }
 
           # ===== SERVER =====
