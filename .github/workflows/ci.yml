@@ -30,9 +30,8 @@ jobs:
           Add-Type -AssemblyName System.IO.Compression.FileSystem
 
           # ===== FRONTEND =====
-          $frontendPaths = @(
-              "frontend-build"  # <-- Only frontend build folder
-          ) | Where-Object { Test-Path $_ }
+          # Update this path to your actual frontend build folder
+          $frontendPaths = @("frontend-build") | Where-Object { Test-Path $_ }
 
           if ($frontendPaths.Count -gt 0) {
               Write-Host "[INFO] Packaging frontend build..."
@@ -49,7 +48,7 @@ jobs:
               Invoke-RestMethod -Uri $frontendUrl -Method Put -InFile "frontend-build-$timestamp.zip" -Headers $headers -ContentType "application/zip"
               Write-Host "[SUCCESS] Frontend uploaded successfully."
           } else {
-              Write-Host "[WARN] No frontend build files found."
+              Write-Host "[WARN] No frontend build files found at the specified path."
           }
 
           # ===== SERVER =====
