@@ -23,59 +23,61 @@ jobs:
           $base64Auth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
 
-          function Get-LatestZip {
-              param ($artifactPath)
-              $url = "$env:NEXUS_URL/com/example/juiceshop/${artifactPath}/"
-              Write-Host "[INFO] Fetching available files from $url ..."
+          function Get-LatestVersion {
+              param ($artifactId)
+              $metadataUrl = "$env:NEXUS_URL/com/example/juiceshop/${artifactId}/maven-metadata.xml"
+              Write-Host "[INFO] Fetching maven-metadata.xml from $metadataUrl ..."
 
               try {
-                  $html = Invoke-WebRequest -Uri $url -Headers $headers -UseBasicParsing
+                  $metadata = Invoke-RestMethod -Uri $metadataUrl -Headers $headers
               } catch {
                   $errMsg = $_.Exception.Message
-                  Write-Host "[ERROR] Failed to fetch ${artifactPath}: ${errMsg}"
+                  Write-Host "[ERROR] Failed to fetch metadata for ${artifactId}: ${errMsg}"
                   exit 1
               }
 
-              # Find all ZIP files matching artifact
-              $zipFiles = ($html.Links | ForEach-Object { $_.href } | Where-Object { $_ -match "^${artifactPath}-\d{14}\.zip$" })
-              if (-not $zipFiles) {
-                  Write-Host "[ERROR] No ZIP files found for ${artifactPath}!"
+              # Read latest version
+              if ($metadata.metadata.versioning.latest) {
+                  $latestVersion = $metadata.metadata.versioning.latest
+              } elseif ($metadata.metadata.versioning.versions.version) {
+                  # fallback: pick last version in <versions>
+                  $latestVersion = ($metadata.metadata.versioning.versions.version | Sort-Object)[-1]
+              } else {
+                  Write-Host "[ERROR] No versions found in metadata for ${artifactId}!"
                   exit 1
               }
 
-              # Pick latest based on timestamp in filename
-              $latestZip = ($zipFiles | Sort-Object)[-1]
-              Write-Host "[INFO] Latest ${artifactPath} ZIP detected: ${latestZip}"
-              return $latestZip
+              Write-Host "[INFO] Latest ${artifactId} version: ${latestVersion}"
+              return $latestVersion
           }
 
           function Deploy-Zip {
-              param ($artifactPath, $deployPath)
-              $latestZip = Get-LatestZip -artifactPath $artifactPath
-              $zipUrl = "$env:NEXUS_URL/com/example/juiceshop/${artifactPath}/${latestZip}"
-              $tempZip = "$env:TEMP/${artifactPath}.zip"
+              param ($artifactId, $deployPath)
+              $latestVersion = Get-LatestVersion -artifactId $artifactId
+              $zipUrl = "$env:NEXUS_URL/com/example/juiceshop/${artifactId}/${latestVersion}/${artifactId}-${latestVersion}.zip"
+              $tempZip = "$env:TEMP/${artifactId}.zip"
 
-              Write-Host "[INFO] Downloading ${artifactPath} from ${zipUrl} ..."
+              Write-Host "[INFO] Downloading ${artifactId} from ${zipUrl} ..."
               try {
                   Invoke-WebRequest -Uri $zipUrl -OutFile $tempZip -Headers $headers
               } catch {
                   $errMsg = $_.Exception.Message
-                  Write-Host "[ERROR] Failed to download ${artifactPath}: ${errMsg}"
+                  Write-Host "[ERROR] Failed to download ${artifactId}: ${errMsg}"
                   exit 1
               }
 
-              Write-Host "[INFO] Extracting ${artifactPath} to ${deployPath} ..."
+              Write-Host "[INFO] Extracting ${artifactId} to ${deployPath} ..."
               if (Test-Path $deployPath) { Remove-Item -Recurse -Force $deployPath }
               Expand-Archive -Path $tempZip -DestinationPath $deployPath
 
               Remove-Item $tempZip
-              Write-Host "[SUCCESS] ${artifactPath} deployed successfully."
+              Write-Host "[SUCCESS] ${artifactId} deployed successfully."
           }
 
           # Deploy frontend
-          Deploy-Zip -artifactPath "frontend-build" -deployPath $env:FRONTEND_PATH
+          Deploy-Zip -artifactId "frontend-build" -deployPath $env:FRONTEND_PATH
 
           # Deploy server
-          Deploy-Zip -artifactPath "server-build" -deployPath $env:SERVER_PATH
+          Deploy-Zip -artifactId "server-build" -deployPath $env:SERVER_PATH
 
           Write-Host "`n✅ Deployment completed successfully!"
