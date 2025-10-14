@@ -1,85 +1,110 @@
-name: Juice Shop CI - Deploy Latest Builds
+name: Juice Shop CI - Upload to Maven Repo
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
-  deploy-latest:
+  build-and-upload:
     runs-on: self-hosted
 
     steps:
+      # 1️⃣ Checkout code
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Deploy latest builds from Nexus
+      # 2️⃣ Setup Node memory
+      - name: Configure Node memory
+        run: set NODE_OPTIONS=--max_old_space_size=4096
+
+      # 3️⃣ Cache frontend dependencies
+      - name: Cache frontend dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            frontend/node_modules
+            frontend/dist
+            frontend/.angular
+          key: ${{ runner.os }}-frontend-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-frontend-
+
+      # 4️⃣ Cache server dependencies
+      - name: Cache server dependencies
+        uses: actions/cache@v3
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-server-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-server-
+
+      # 5️⃣ Install frontend dependencies
+      - name: Install frontend dependencies
+        run: |
+          cd frontend
+          npm install --legacy-peer-deps --prefer-offline --no-audit
+          cd ..
+
+      # 6️⃣ Build frontend
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm run build -- --configuration production --watch=false --verbose
+          cd ..
+
+      # 7️⃣ Install server dependencies
+      - name: Install server dependencies
+        run: npm install --prefer-offline --no-audit
+
+      # 8️⃣ Build server
+      - name: Build server
+        run: npm run build:server
+
+      # 9️⃣ Upload ZIPs to Nexus Maven repo (no version folders)
+      - name: Upload build ZIPs to Nexus Maven repo
         shell: powershell
         env:
-          NEXUS_URL: http://127.0.0.1:8081
+          NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
-          FRONTEND_PATH: C:\inetpub\wwwroot\juice-shop
-          SERVER_PATH: C:\JuiceShopServer
         run: |
-          Write-Host "[INFO] Starting deployment..."
+          Write-Host "🟢 Packaging and uploading build artifacts to Maven repo..."
 
-          # -------------------------------
-          # Auth header
-          # -------------------------------
-          $base64Auth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
+          # Prepare Basic Auth header
+          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
 
-          # -------------------------------
-          # Function to get latest artifact via Nexus REST API
-          # -------------------------------
-          function Get-LatestArtifact($artifactId) {
-              $apiUrl = "${env:NEXUS_URL}/service/rest/v1/assets?repository=JuiceShopMavenDemo&group=com.example.juiceshop&name=${artifactId}"
-              Write-Host "[INFO] Querying Nexus API for latest version of ${artifactId} ..."
+          # ===== FRONTEND =====
+          if (Test-Path "frontend/dist") {
+              Write-Host "[INFO] Packaging frontend build..."
+              Compress-Archive -Path "frontend/dist/*" -DestinationPath "frontend-build.zip" -Force
 
-              try {
-                  $response = Invoke-RestMethod -Uri $apiUrl -Headers $headers -UseBasicParsing
-
-                  if ($response.items.Count -eq 0) { throw "No versions found" }
-
-                  # Filter only ZIP artifacts AND correct artifactId
-                  $zipArtifacts = $response.items | Where-Object { $_.maven2.extension -eq "zip" -and $_.maven2.artifactId -eq $artifactId }
-
-                  # Sort by version/timestamp descending
-                  $latest = $zipArtifacts | Sort-Object { [Version]$_.version } -Descending | Select-Object -First 1
-
-                  return $latest
-              } catch {
-                  Write-Warning "[WARN] Cannot fetch artifact ${artifactId}: $_"
-                  return $null
-              }
+              $frontendUrl = "${env:NEXUS_URL}/com/example/juiceshop/frontend-build/frontend-build.zip"
+              Write-Host "[INFO] Uploading frontend ZIP → $frontendUrl"
+              Invoke-RestMethod -Uri $frontendUrl -Method Put -InFile "frontend-build.zip" -Headers $headers
+              Write-Host "[SUCCESS] Frontend uploaded successfully."
+          } else {
+              Write-Host "[WARN] frontend/dist not found, skipping frontend upload."
           }
 
-          # -------------------------------
-          # Function to download and deploy artifact
-          # -------------------------------
-          function Deploy-Artifact($artifactId, $deployPath) {
-              $artifact = Get-LatestArtifact $artifactId
-              if ($artifact -ne $null) {
-                  $zipUrl = $artifact.downloadUrl
-                  $version = $artifact.version
-                  $outFile = "${artifactId}.zip"
+          # ===== SERVER =====
+          $serverPaths = @(
+              "app.ts","server.ts","package.json","tsconfig.json",
+              "models","routes","lib","data","views","rsn","config","build"
+          ) | Where-Object { Test-Path $_ }
 
-                  Write-Host "[INFO] Downloading ${artifactId} from $zipUrl ..."
-                  Invoke-WebRequest -Uri $zipUrl -OutFile $outFile -Headers $headers -UseBasicParsing
+          if ($serverPaths.Count -gt 0) {
+              Write-Host "[INFO] Packaging server build..."
+              Compress-Archive -Path $serverPaths -DestinationPath "server-build.zip" -Force
 
-                  Write-Host "[INFO] Extracting ${artifactId} to ${deployPath} ..."
-                  Remove-Item -Recurse -Force "${deployPath}\*" -ErrorAction SilentlyContinue
-                  Expand-Archive -Path $outFile -DestinationPath $deployPath -Force
-
-                  Write-Host "[SUCCESS] ${artifactId} deployed successfully. Version: ${version}"
-              } else {
-                  Write-Warning "[WARN] ${artifactId} deployment skipped: no artifact found"
-              }
+              $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/server-build/server-build.zip"
+              Write-Host "[INFO] Uploading server ZIP → $serverUrl"
+              Invoke-RestMethod -Uri $serverUrl -Method Put -InFile "server-build.zip" -Headers $headers
+              Write-Host "[SUCCESS] Server uploaded successfully."
+          } else {
+              Write-Host "[WARN] No server files found, skipping server upload."
           }
 
-          # -------------------------------
-          # Deploy frontend and server
-          # -------------------------------
-          Deploy-Artifact "frontend-build" ${env:FRONTEND_PATH}
-          Deploy-Artifact "server-build" ${env:SERVER_PATH}
-
-          Write-Host "✅ Deployment completed successfully!"
+          Write-Host "✅ All available builds uploaded to Maven repo successfully!"
