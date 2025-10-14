@@ -1,29 +1,25 @@
-name: Juice Shop CI - Upload to Maven Repo
+name: Juice Shop Full Deploy & Upload
 
 on:
-  push:
-    branches:
-      - main
-  workflow_dispatch:
+  workflow_dispatch:  # Manual trigger
 
 jobs:
-  build-and-upload:
+  full-deploy:
     runs-on: self-hosted
 
     env:
       NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
       NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
       NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
-      BUILD_VERSION: ${{ github.run_id }}  # unique version per CI run
 
     steps:
-      # 1️⃣ Checkout code
+      # 1️⃣ Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2️⃣ Increase Node memory (8 GB) to prevent Angular out-of-memory
-      - name: Configure Node memory
-        run: set NODE_OPTIONS=--max_old_space_size=8192
+      # 2️⃣ Post-checkout repository
+      - name: Post-checkout repository
+        run: Write-Host "[INFO] Repository checked out."
 
       # 3️⃣ Cache frontend dependencies
       - name: Cache frontend dependencies
@@ -46,67 +42,45 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-server-
 
-      # 5️⃣ Install frontend dependencies
-      - name: Install frontend dependencies
+      # 5️⃣ Upload frontend build to Nexus (optional)
+      - name: Upload frontend build
+        shell: powershell
         run: |
-          cd frontend
-          npm install --legacy-peer-deps --prefer-offline --no-audit
-          cd ..
+          Write-Host "[INFO] Upload frontend build to Nexus..."
+          $base64Auth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
+          $headers = @{ Authorization = "Basic $base64Auth" }
 
-      # 6️⃣ Build frontend
-      - name: Build frontend
-        run: |
-          cd frontend
-          npm run build -- --configuration production --watch=false --verbose
-          cd ..
-
-      # 7️⃣ Install server dependencies
-      - name: Install server dependencies
-        run: npm install --prefer-offline --no-audit
-
-      # 8️⃣ Build server
-      - name: Build server
-        run: npm run build:server
-
-      # 9️⃣ Package frontend & server into ZIPs
-      - name: Package build artifacts
-        run: |
-          Compress-Archive -Path frontend/dist/* -DestinationPath frontend-build-$BUILD_VERSION.zip -Force
-          $serverPaths = @(
-              "app.ts","server.ts","package.json","tsconfig.json",
-              "models","routes","lib","data","views","rsn","config","build"
-          ) | Where-Object { Test-Path $_ }
-          if ($serverPaths.Count -gt 0) {
-              Compress-Archive -Path $serverPaths -DestinationPath "server-build-$BUILD_VERSION.zip" -Force
+          $frontendZip = Get-ChildItem -Path "./frontend" -Filter "frontend-build-*.zip" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if ($frontendZip) {
+              $buildVersion = ($frontendZip.BaseName -split "-")[-1]
+              $frontendUrl = "${env:NEXUS_URL}/com/example/juiceshop/frontend-build/$buildVersion/$($frontendZip.Name)"
+              Write-Host "[INFO] Uploading $($frontendZip.Name) → $frontendUrl"
+              Invoke-RestMethod -Uri $frontendUrl -Method Put -InFile $frontendZip.FullName -Headers $headers
+              Write-Host "[SUCCESS] Frontend uploaded successfully!"
+          } else {
+              Write-Host "[WARN] No frontend ZIP found for upload."
           }
 
-      # 🔟 Upload frontend to Maven
-      - name: Upload frontend build to Nexus
+      # 6️⃣ Upload server build to Nexus (optional)
+      - name: Upload server build
+        shell: powershell
         run: |
-          mvn deploy:deploy-file `
-            -DgroupId=com.example.juiceshop `
-            -DartifactId=frontend-build `
-            -Dversion=$BUILD_VERSION `
-            -Dpackaging=zip `
-            -Dfile=frontend-build-$BUILD_VERSION.zip `
-            -DrepositoryId=nexus `
-            -Durl=$NEXUS_URL
-        shell: bash
+          Write-Host "[INFO] Upload server build to Nexus..."
+          $base64Auth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
+          $headers = @{ Authorization = "Basic $base64Auth" }
 
-      # 1️⃣1️⃣ Upload server to Maven
-      - name: Upload server build to Nexus
-        run: |
-          mvn deploy:deploy-file `
-            -DgroupId=com.example.juiceshop `
-            -DartifactId=server-build `
-            -Dversion=$BUILD_VERSION `
-            -Dpackaging=zip `
-            -Dfile=server-build-$BUILD_VERSION.zip `
-            -DrepositoryId=nexus `
-            -Durl=$NEXUS_URL
-        shell: bash
+          $serverZip = Get-ChildItem -Path "." -Filter "server-build-*.zip" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if ($serverZip) {
+              $buildVersion = ($serverZip.BaseName -split "-")[-1]
+              $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/server-build/$buildVersion/$($serverZip.Name)"
+              Write-Host "[INFO] Uploading $($serverZip.Name) → $serverUrl"
+              Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $serverZip.FullName -Headers $headers
+              Write-Host "[SUCCESS] Server uploaded successfully!"
+          } else {
+              Write-Host "[WARN] No server ZIP found for upload."
+          }
 
-      # 1️⃣2️⃣ Deploy latest builds from Nexus
+      # 7️⃣ Deploy latest frontend & server from Nexus
       - name: Deploy latest builds
         shell: powershell
         run: |
@@ -116,15 +90,25 @@ jobs:
 
           function Get-LatestVersion {
               param ($artifactId)
-              $metadataUrl = "$env:NEXUS_URL/com/example/juiceshop/${artifactId}/maven-metadata.xml"
-              $metadata = Invoke-RestMethod -Uri $metadataUrl -Headers $headers
-              return $metadata.metadata.versioning.latest
+              $metadataUrl = "${env:NEXUS_URL}/com/example/juiceshop/${artifactId}/maven-metadata.xml"
+              try {
+                  $metadata = Invoke-RestMethod -Uri $metadataUrl -Headers $headers
+                  return $metadata.metadata.versioning.latest
+              } catch {
+                  Write-Host "[WARN] Cannot fetch metadata for $artifactId. Falling back to latest ZIP in repo."
+                  $latestZip = Get-ChildItem -Path "." -Filter "$artifactId-*.zip" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+                  if ($latestZip) {
+                      return ($latestZip.BaseName -split "-")[-1]
+                  } else {
+                      throw "No $artifactId build found."
+                  }
+              }
           }
 
           function Deploy-Zip {
               param ($artifactId, $deployPath)
               $latestVersion = Get-LatestVersion -artifactId $artifactId
-              $zipUrl = "$env:NEXUS_URL/com/example/juiceshop/${artifactId}/${latestVersion}/${artifactId}-${latestVersion}.zip"
+              $zipUrl = "${env:NEXUS_URL}/com/example/juiceshop/${artifactId}/${latestVersion}/${artifactId}-${latestVersion}.zip"
               $tempZip = "$env:TEMP/${artifactId}.zip"
 
               Write-Host "[INFO] Downloading $artifactId version $latestVersion ..."
@@ -137,7 +121,31 @@ jobs:
               Write-Host "[SUCCESS] $artifactId deployed successfully to $deployPath"
           }
 
+          # Deploy frontend
           Deploy-Zip -artifactId "frontend-build" -deployPath "C:\inetpub\wwwroot\juice-shop"
+
+          # Deploy server
           Deploy-Zip -artifactId "server-build" -deployPath "C:\JuiceShopServer"
 
           Write-Host "`n✅ Deployment completed successfully!"
+
+      # 8️⃣ Post-cache server dependencies
+      - name: Post-cache server dependencies
+        uses: actions/cache@v3
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-server-${{ hashFiles('package-lock.json') }}
+
+      # 9️⃣ Post-cache frontend dependencies
+      - name: Post-cache frontend dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            frontend/node_modules
+            frontend/dist
+            frontend/.angular
+          key: ${{ runner.os }}-frontend-${{ hashFiles('frontend/package-lock.json') }}
+
+      # 🔟 Complete job
+      - name: Complete job
+        run: Write-Host "[INFO] Full deploy and upload job completed successfully!"
