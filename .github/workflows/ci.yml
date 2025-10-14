@@ -1,72 +1,72 @@
-name: Juice Shop Deploy Only
+name: Juice Shop CI - Deploy Latest Builds
 
 on:
   workflow_dispatch:
 
 jobs:
-  deploy:
+  deploy-latest:
     runs-on: self-hosted
 
     steps:
+      # 1️⃣ Checkout repository (needed only for scripts/config)
       - name: Checkout repository
         uses: actions/checkout@v3
 
+      # 2️⃣ Deploy frontend and server from Nexus
       - name: Deploy latest builds from Nexus
         shell: powershell
         env:
           NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
-          FRONTEND_DEPLOY_PATH: C:\inetpub\wwwroot\juice-shop
-          SERVER_DEPLOY_PATH: C:\JuiceShopServer
+          FRONTEND_PATH: C:\inetpub\wwwroot\juice-shop
+          SERVER_PATH: C:\JuiceShopServer
         run: |
           Write-Host "[INFO] Starting deployment..."
 
-          # Prepare Basic Auth
-          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
+          $base64Auth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
 
-          # Function to get the latest build ZIP from Maven2 repo
-          function Get-LatestArtifactZip($artifactId) {
-              $metadataUrl = "${env:NEXUS_URL}/com/example/juiceshop/$artifactId/maven-metadata.xml"
+          function Get-LatestVersion($artifactId) {
+              $artifactFolderUrl = "${env:NEXUS_URL}/com/example/juiceshop/$artifactId/"
+              Write-Host "[INFO] Fetching available files from $artifactFolderUrl ..."
+              
               try {
-                  Write-Host "[INFO] Fetching maven-metadata.xml from $metadataUrl ..."
-                  $metadata = Invoke-RestMethod -Uri $metadataUrl -Headers $headers -UseBasicParsing
-                  $latestVersion = $metadata.metadata.versioning.latest
-                  if (-not $latestVersion) { throw "No latest version found in metadata." }
-                  Write-Host "[INFO] Latest $artifactId version detected: $latestVersion"
-                  $zipUrl = "${env:NEXUS_URL}/com/example/juiceshop/$artifactId/$latestVersion/$artifactId-$latestVersion.zip"
-                  return $zipUrl, $latestVersion
+                  $response = Invoke-RestMethod -Uri $artifactFolderUrl -Headers $headers
+                  $versions = ($response.links | Where-Object { $_.rel -eq "up" -or $_.href -match "^\d+$" }) | ForEach-Object { $_.href.TrimEnd('/') }
+                  if ($versions.Count -eq 0) { throw "No versions found" }
+                  $latestVersion = ($versions | Sort-Object -Descending)[0]
+                  return $latestVersion
               } catch {
-                  Write-Host "[WARN] Cannot fetch metadata for $artifactId. Falling back to latest ZIP in repo."
-                  return $null, $null
+                  Write-Host "[WARN] Cannot fetch files for $artifactId. Falling back to local detection."
+                  return $null
               }
           }
 
           # ===== FRONTEND =====
-          $frontendUrl, $frontendVersion = Get-LatestArtifactZip "frontend-build"
-          if ($frontendUrl) {
-              Write-Host "[INFO] Downloading frontend ZIP from $frontendUrl ..."
-              Invoke-WebRequest -Uri $frontendUrl -OutFile "frontend-build.zip" -Headers $headers
-              Write-Host "[INFO] Extracting frontend to $env:FRONTEND_DEPLOY_PATH ..."
-              Remove-Item -Recurse -Force "$env:FRONTEND_DEPLOY_PATH\*" -ErrorAction SilentlyContinue
-              Expand-Archive -Path "frontend-build.zip" -DestinationPath $env:FRONTEND_DEPLOY_PATH -Force
+          $frontendVersion = Get-LatestVersion "frontend-build"
+          if ($frontendVersion) {
+              $frontendZipUrl = "${env:NEXUS_URL}/com/example/juiceshop/frontend-build/$frontendVersion/frontend-build-$frontendVersion.zip"
+              Write-Host "[INFO] Downloading frontend ZIP from $frontendZipUrl ..."
+              Invoke-WebRequest -Uri $frontendZipUrl -OutFile "frontend-build.zip" -Headers $headers
+
+              Write-Host "[INFO] Extracting frontend to ${env:FRONTEND_PATH} ..."
+              Remove-Item -Recurse -Force "${env:FRONTEND_PATH}\*" -ErrorAction SilentlyContinue
+              Expand-Archive -Path "frontend-build.zip" -DestinationPath ${env:FRONTEND_PATH} -Force
               Write-Host "[SUCCESS] Frontend deployed successfully."
-          } else {
-              Write-Host "[WARN] No frontend-build build found."
           }
 
           # ===== SERVER =====
-          $serverUrl, $serverVersion = Get-LatestArtifactZip "server-build"
-          if ($serverUrl) {
-              Write-Host "[INFO] Downloading server ZIP from $serverUrl ..."
-              Invoke-WebRequest -Uri $serverUrl -OutFile "server-build.zip" -Headers $headers
-              Write-Host "[INFO] Extracting server to $env:SERVER_DEPLOY_PATH ..."
-              Remove-Item -Recurse -Force "$env:SERVER_DEPLOY_PATH\*" -ErrorAction SilentlyContinue
-              Expand-Archive -Path "server-build.zip" -DestinationPath $env:SERVER_DEPLOY_PATH -Force
+          $serverVersion = Get-LatestVersion "server-build"
+          if ($serverVersion) {
+              $serverZipUrl = "${env:NEXUS_URL}/com/example/juiceshop/server-build/$serverVersion/server-build-$serverVersion.zip"
+              Write-Host "[INFO] Downloading server ZIP from $serverZipUrl ..."
+              Invoke-WebRequest -Uri $serverZipUrl -OutFile "server-build.zip" -Headers $headers
+
+              Write-Host "[INFO] Extracting server to ${env:SERVER_PATH} ..."
+              Remove-Item -Recurse -Force "${env:SERVER_PATH}\*" -ErrorAction SilentlyContinue
+              Expand-Archive -Path "server-build.zip" -DestinationPath ${env:SERVER_PATH} -Force
               Write-Host "[SUCCESS] Server deployed successfully."
-          } else {
-              Write-Host "[WARN] No server-build build found."
           }
 
           Write-Host "✅ Deployment completed successfully!"
