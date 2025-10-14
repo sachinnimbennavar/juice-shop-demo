@@ -16,7 +16,7 @@ jobs:
       - name: Deploy latest builds from Nexus
         shell: powershell
         env:
-          NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
+          NEXUS_URL: http://127.0.0.1:8081
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
           FRONTEND_PATH: C:\inetpub\wwwroot\juice-shop
@@ -31,19 +31,20 @@ jobs:
           $headers = @{ Authorization = "Basic $base64Auth" }
 
           # -------------------------------
-          # Helper: Get latest version from Nexus
+          # Helper: Get latest version from Nexus via REST API
           # -------------------------------
           function Get-LatestVersion($artifactId) {
-              $artifactFolderUrl = "${env:NEXUS_URL}/com/example/juiceshop/$artifactId/"
-              Write-Host "[INFO] Fetching available files from $artifactFolderUrl ..."
+              $searchUrl = "${env:NEXUS_URL}/service/rest/v1/search?repository=JuiceShopMavenDemo&group=com.example.juiceshop&name=$artifactId"
+              Write-Host "[INFO] Searching Nexus for latest version of $artifactId ..."
               
               try {
-                  $response = Invoke-RestMethod -Uri $artifactFolderUrl -Headers $headers -UseBasicParsing
-                  $versions = ($response.items | ForEach-Object { $_.text })  # JSON API response
+                  $response = Invoke-RestMethod -Uri $searchUrl -Headers $headers -UseBasicParsing
+                  $versions = $response.items | ForEach-Object { $_.version }
                   if ($versions.Count -eq 0) { throw "No versions found" }
 
                   # Sort numerically
                   $latestVersion = ($versions | ForEach-Object { [Version]$_ } | Sort-Object -Descending | Select-Object -First 1).ToString()
+                  Write-Host "[INFO] Latest version of $artifactId: $latestVersion"
                   return $latestVersion
               } catch {
                   Write-Warning "[WARN] Cannot fetch files for $artifactId. Falling back to local detection."
@@ -57,7 +58,7 @@ jobs:
           function Deploy-Artifact($artifactId, $deployPath, $filePrefix) {
               $version = Get-LatestVersion $artifactId
               if ($version) {
-                  $zipUrl = "${env:NEXUS_URL}/com/example/juiceshop/$artifactId/$version/$filePrefix-$version.zip"
+                  $zipUrl = "${env:NEXUS_URL}/repository/JuiceShopMavenDemo/com/example/juiceshop/$artifactId/$version/$filePrefix-$version.zip"
                   Write-Host "[INFO] Downloading $artifactId ZIP from $zipUrl ..."
 
                   $outFile = "$filePrefix.zip"
