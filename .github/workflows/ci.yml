@@ -8,9 +8,11 @@ jobs:
     runs-on: self-hosted
 
     steps:
+      # 1️⃣ Checkout repository (needed to access frontend-build and server files)
       - name: Checkout repository
         uses: actions/checkout@v3
 
+      # 2️⃣ Upload build ZIPs to Maven repo
       - name: Upload build ZIPs to Nexus Maven repo
         shell: powershell
         env:
@@ -19,8 +21,9 @@ jobs:
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
           Write-Host "🟢 Packaging and uploading build artifacts to Maven repo..."
-
           $timestamp = (Get-Date -Format "yyyyMMddHHmmss")
+
+          # Prepare Basic Auth header
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
 
