@@ -12,7 +12,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2️⃣ Upload build ZIPs
+      # 2️⃣ Build frontend
+      - name: Build Frontend
+        working-directory: frontend   # adjust if your frontend folder is different
+        run: |
+          npm install
+          npm run build
+
+      # 3️⃣ Upload build ZIPs to Nexus
       - name: Upload build ZIPs to Nexus Maven repo
         shell: powershell
         env:
@@ -30,8 +37,8 @@ jobs:
           Add-Type -AssemblyName System.IO.Compression.FileSystem
 
           # ===== FRONTEND =====
-          # Update this path to your actual frontend build folder
-          $frontendPaths = @("frontend-build") | Where-Object { Test-Path $_ }
+          # Update path to your frontend build output
+          $frontendPaths = @("frontend/build") | Where-Object { Test-Path $_ }
 
           if ($frontendPaths.Count -gt 0) {
               Write-Host "[INFO] Packaging frontend build..."
