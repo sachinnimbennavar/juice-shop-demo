@@ -8,11 +8,9 @@ jobs:
     runs-on: self-hosted
 
     steps:
-      # 1️⃣ Checkout repository (needed only for scripts/config)
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2️⃣ Deploy frontend and server from Nexus
       - name: Deploy latest builds from Nexus
         shell: powershell
         env:
@@ -23,38 +21,25 @@ jobs:
           SERVER_PATH: C:\JuiceShopServer
         run: |
           Write-Host "[INFO] Starting deployment..."
-
-          # -------------------------------
-          # Set up authentication header
-          # -------------------------------
           $base64Auth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
 
-          # -------------------------------
-          # Helper: Get latest version from Nexus via REST API
-          # -------------------------------
           function Get-LatestVersion($artifactId) {
-              $searchUrl = "${env:NEXUS_URL}/service/rest/v1/search?repository=JuiceShopMavenDemo&group=com.example.juiceshop&name=${artifactId}"
+              $searchUrl = "${env:NEXUS_URL}/service/rest/v1/search/assets?repository=JuiceShopMavenDemo&group=com.example.juiceshop&name=${artifactId}"
               Write-Host "[INFO] Searching Nexus for latest version of ${artifactId} ..."
-              
+
               try {
                   $response = Invoke-RestMethod -Uri $searchUrl -Headers $headers -UseBasicParsing
-                  $versions = $response.items | ForEach-Object { $_.version }
+                  # Extract version from path or use version field
+                  $versions = $response.items | ForEach-Object { $_.version } | Where-Object { $_ -ne $null } | Sort-Object -Descending
                   if ($versions.Count -eq 0) { throw "No versions found" }
-
-                  # Sort numerically
-                  $latestVersion = ($versions | ForEach-Object { [Version]$_ } | Sort-Object -Descending | Select-Object -First 1).ToString()
-                  Write-Host "[INFO] Latest version of ${artifactId}: ${latestVersion}"
-                  return $latestVersion
+                  return $versions[0]
               } catch {
                   Write-Warning "[WARN] Cannot fetch files for ${artifactId}. Falling back to local detection."
                   return $null
               }
           }
 
-          # -------------------------------
-          # Helper: Deploy artifact
-          # -------------------------------
           function Deploy-Artifact($artifactId, $deployPath, $filePrefix) {
               $version = Get-LatestVersion ${artifactId}
               if ($version) {
@@ -62,17 +47,7 @@ jobs:
                   Write-Host "[INFO] Downloading ${artifactId} ZIP from ${zipUrl} ..."
 
                   $outFile = "${filePrefix}.zip"
-                  $maxRetries = 3
-                  for ($i=1; $i -le $maxRetries; $i++) {
-                      try {
-                          Invoke-WebRequest -Uri $zipUrl -OutFile $outFile -Headers $headers -UseBasicParsing
-                          break
-                      } catch {
-                          Write-Warning "[WARN] Download attempt $i failed: $_"
-                          if ($i -eq $maxRetries) { throw "Failed to download ${artifactId} after $maxRetries attempts" }
-                          Start-Sleep -Seconds 5
-                      }
-                  }
+                  Invoke-WebRequest -Uri $zipUrl -OutFile $outFile -Headers $headers -UseBasicParsing
 
                   Write-Host "[INFO] Extracting ${artifactId} to ${deployPath} ..."
                   Remove-Item -Recurse -Force "${deployPath}\*" -ErrorAction SilentlyContinue
@@ -81,9 +56,6 @@ jobs:
               }
           }
 
-          # -------------------------------
-          # Deploy Frontend & Server
-          # -------------------------------
           Deploy-Artifact "frontend-build" ${env:FRONTEND_PATH} "frontend-build"
           Deploy-Artifact "server-build" ${env:SERVER_PATH} "server-build"
 
