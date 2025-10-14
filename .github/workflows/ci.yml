@@ -1,4 +1,4 @@
-name: Juice Shop CI/CD
+name: Juice Shop CI - Upload to Maven Repo
 
 on:
   push:
@@ -7,55 +7,80 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-upload-deploy:
+  build-and-upload:
     runs-on: self-hosted
 
     env:
       NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
-      FRONTEND_PATH: C:\inetpub\wwwroot\juice-shop
-      SERVER_PATH: C:\JuiceShopServer
       NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
       NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
-      BUILD_VERSION: ${{ github.run_id }} # unique per CI run
+      BUILD_VERSION: ${{ github.run_id }}  # unique version per CI run
 
     steps:
       # 1️⃣ Checkout code
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2️⃣ Setup Node memory
+      # 2️⃣ Increase Node memory (8 GB) to prevent Angular out-of-memory
       - name: Configure Node memory
-        run: set NODE_OPTIONS=--max_old_space_size=4096
+        run: set NODE_OPTIONS=--max_old_space_size=8192
 
-      # 3️⃣ Install frontend dependencies
+      # 3️⃣ Cache frontend dependencies
+      - name: Cache frontend dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            frontend/node_modules
+            frontend/dist
+            frontend/.angular
+          key: ${{ runner.os }}-frontend-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-frontend-
+
+      # 4️⃣ Cache server dependencies
+      - name: Cache server dependencies
+        uses: actions/cache@v3
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-server-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-server-
+
+      # 5️⃣ Install frontend dependencies
       - name: Install frontend dependencies
         run: |
           cd frontend
           npm install --legacy-peer-deps --prefer-offline --no-audit
           cd ..
 
-      # 4️⃣ Build frontend
+      # 6️⃣ Build frontend
       - name: Build frontend
         run: |
           cd frontend
           npm run build -- --configuration production --watch=false --verbose
           cd ..
 
-      # 5️⃣ Install server dependencies
+      # 7️⃣ Install server dependencies
       - name: Install server dependencies
         run: npm install --prefer-offline --no-audit
 
-      # 6️⃣ Build server
+      # 8️⃣ Build server
       - name: Build server
         run: npm run build:server
 
-      # 7️⃣ Package frontend & server
-      - name: Package artifacts
+      # 9️⃣ Package frontend & server into ZIPs
+      - name: Package build artifacts
         run: |
           Compress-Archive -Path frontend/dist/* -DestinationPath frontend-build-$BUILD_VERSION.zip -Force
-          Compress-Archive -Path app.ts,server.ts,package.json,tsconfig.json,models,routes,lib,data,views,rsn,config,build -DestinationPath server-build-$BUILD_VERSION.zip -Force
+          $serverPaths = @(
+              "app.ts","server.ts","package.json","tsconfig.json",
+              "models","routes","lib","data","views","rsn","config","build"
+          ) | Where-Object { Test-Path $_ }
+          if ($serverPaths.Count -gt 0) {
+              Compress-Archive -Path $serverPaths -DestinationPath "server-build-$BUILD_VERSION.zip" -Force
+          }
 
-      # 8️⃣ Upload frontend (Maven-compliant)
+      # 🔟 Upload frontend to Maven
       - name: Upload frontend build to Nexus
         run: |
           mvn deploy:deploy-file `
@@ -68,7 +93,7 @@ jobs:
             -Durl=$NEXUS_URL
         shell: bash
 
-      # 9️⃣ Upload server (Maven-compliant)
+      # 1️⃣1️⃣ Upload server to Maven
       - name: Upload server build to Nexus
         run: |
           mvn deploy:deploy-file `
@@ -81,7 +106,7 @@ jobs:
             -Durl=$NEXUS_URL
         shell: bash
 
-      # 🔟 Deploy latest builds
+      # 1️⃣2️⃣ Deploy latest builds from Nexus
       - name: Deploy latest builds
         shell: powershell
         run: |
@@ -102,15 +127,17 @@ jobs:
               $zipUrl = "$env:NEXUS_URL/com/example/juiceshop/${artifactId}/${latestVersion}/${artifactId}-${latestVersion}.zip"
               $tempZip = "$env:TEMP/${artifactId}.zip"
 
+              Write-Host "[INFO] Downloading $artifactId version $latestVersion ..."
               Invoke-WebRequest -Uri $zipUrl -OutFile $tempZip -Headers $headers
 
               if (Test-Path $deployPath) { Remove-Item -Recurse -Force $deployPath }
               Expand-Archive -Path $tempZip -DestinationPath $deployPath
               Remove-Item $tempZip
 
-              Write-Host "[SUCCESS] ${artifactId} deployed successfully."
+              Write-Host "[SUCCESS] $artifactId deployed successfully to $deployPath"
           }
 
-          Deploy-Zip -artifactId "frontend-build" -deployPath $env:FRONTEND_PATH
-          Deploy-Zip -artifactId "server-build" -deployPath $env:SERVER_PATH
+          Deploy-Zip -artifactId "frontend-build" -deployPath "C:\inetpub\wwwroot\juice-shop"
+          Deploy-Zip -artifactId "server-build" -deployPath "C:\JuiceShopServer"
+
           Write-Host "`n✅ Deployment completed successfully!"
