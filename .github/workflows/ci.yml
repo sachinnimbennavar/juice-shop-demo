@@ -28,11 +28,11 @@ jobs:
           $headers = @{ Authorization = "Basic $base64Auth" }
 
           # ===== FRONTEND =====
-          if (Test-Path "frontend-build") {
-              Write-Host "[INFO] Packaging frontend build from frontend-build folder..."
+          $frontendPaths = @("frontend-build") | Where-Object { Test-Path $_ }
 
-              # Zip the folder itself to keep structure intact
-              Compress-Archive -Path "frontend-build" -DestinationPath "frontend-build-$timestamp.zip" -Force
+          if ($frontendPaths.Count -gt 0) {
+              Write-Host "[INFO] Packaging frontend build..."
+              Compress-Archive -Path $frontendPaths -DestinationPath "frontend-build-$timestamp.zip" -Force
 
               $frontendUrl = "${env:NEXUS_URL}/com/example/juiceshop/frontend-build/$timestamp/frontend-build-$timestamp.zip"
               Write-Host "[INFO] Uploading frontend ZIP → $frontendUrl"
