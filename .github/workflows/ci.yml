@@ -19,7 +19,6 @@ jobs:
         run: |
           Write-Host "[INFO] Starting deployment..."
 
-          # Build Basic Auth header
           $base64Auth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
 
@@ -36,17 +35,7 @@ jobs:
                   exit 1
               }
 
-              # Read latest version
-              if ($metadata.metadata.versioning.latest) {
-                  $latestVersion = $metadata.metadata.versioning.latest
-              } elseif ($metadata.metadata.versioning.versions.version) {
-                  # fallback: pick last version in <versions>
-                  $latestVersion = ($metadata.metadata.versioning.versions.version | Sort-Object)[-1]
-              } else {
-                  Write-Host "[ERROR] No versions found in metadata for ${artifactId}!"
-                  exit 1
-              }
-
+              $latestVersion = $metadata.metadata.versioning.latest
               Write-Host "[INFO] Latest ${artifactId} version: ${latestVersion}"
               return $latestVersion
           }
@@ -69,15 +58,12 @@ jobs:
               Write-Host "[INFO] Extracting ${artifactId} to ${deployPath} ..."
               if (Test-Path $deployPath) { Remove-Item -Recurse -Force $deployPath }
               Expand-Archive -Path $tempZip -DestinationPath $deployPath
-
               Remove-Item $tempZip
+
               Write-Host "[SUCCESS] ${artifactId} deployed successfully."
           }
 
-          # Deploy frontend
           Deploy-Zip -artifactId "frontend-build" -deployPath $env:FRONTEND_PATH
-
-          # Deploy server
           Deploy-Zip -artifactId "server-build" -deployPath $env:SERVER_PATH
 
           Write-Host "`n✅ Deployment completed successfully!"
