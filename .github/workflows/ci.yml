@@ -19,50 +19,50 @@ jobs:
 
           function Get-LatestFolder {
               param ($artifactPath)
-              $url = "$env:NEXUS_URL/com/example/juiceshop/$artifactPath/"
+              $url = "$env:NEXUS_URL/com/example/juiceshop/${artifactPath}/"
               Write-Host "[INFO] Fetching available versions from $url ..."
               try {
                   $html = Invoke-WebRequest -Uri $url -UseBasicParsing
               } catch {
                   $errMsg = $_.Exception.Message
-                  Write-Host "[ERROR] Failed to fetch $artifactPath: $errMsg"
+                  Write-Host "[ERROR] Failed to fetch ${artifactPath}: ${errMsg}"
                   exit 1
               }
 
               # Extract 14-digit folder names (timestamps)
               $folders = ($html.Links | ForEach-Object { $_.href } | Where-Object { $_ -match '^\d{14}/$' }) -replace '/$',''
               if (-not $folders) {
-                  Write-Host "[ERROR] No version folders found in Nexus for $artifactPath!"
+                  Write-Host "[ERROR] No version folders found in Nexus for ${artifactPath}!"
                   exit 1
               }
 
               # Pick latest timestamp
               $latest = ($folders | Sort-Object)[-1]
-              Write-Host "[INFO] Latest $artifactPath version detected: $latest"
+              Write-Host "[INFO] Latest ${artifactPath} version detected: ${latest}"
               return $latest
           }
 
           function Deploy-Zip {
               param ($artifactPath, $deployPath)
               $latestFolder = Get-LatestFolder -artifactPath $artifactPath
-              $zipUrl = "$env:NEXUS_URL/com/example/juiceshop/$artifactPath/$latestFolder/$artifactPath-$latestFolder.zip"
-              $tempZip = "$env:TEMP\$artifactPath.zip"
+              $zipUrl = "$env:NEXUS_URL/com/example/juiceshop/${artifactPath}/${latestFolder}/${artifactPath}-${latestFolder}.zip"
+              $tempZip = "$env:TEMP/${artifactPath}.zip"
 
-              Write-Host "[INFO] Downloading $artifactPath from $zipUrl ..."
+              Write-Host "[INFO] Downloading ${artifactPath} from ${zipUrl} ..."
               try {
                   Invoke-WebRequest -Uri $zipUrl -OutFile $tempZip
               } catch {
                   $errMsg = $_.Exception.Message
-                  Write-Host "[ERROR] Failed to download $artifactPath: $errMsg"
+                  Write-Host "[ERROR] Failed to download ${artifactPath}: ${errMsg}"
                   exit 1
               }
 
-              Write-Host "[INFO] Extracting $artifactPath to $deployPath ..."
+              Write-Host "[INFO] Extracting ${artifactPath} to ${deployPath} ..."
               if (Test-Path $deployPath) { Remove-Item -Recurse -Force $deployPath }
               Expand-Archive -Path $tempZip -DestinationPath $deployPath
 
               Remove-Item $tempZip
-              Write-Host "[SUCCESS] $artifactPath deployed successfully."
+              Write-Host "[SUCCESS] ${artifactPath} deployed successfully."
           }
 
           # Deploy frontend
