@@ -14,14 +14,14 @@ jobs:
       - name: Deploy latest builds from Nexus
         shell: powershell
         env:
-          NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
+          NEXUS_URL: http://127.0.0.1:8081
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
           FRONTEND_PATH: C:\inetpub\wwwroot\juice-shop
           SERVER_PATH: C:\JuiceShopServer
         run: |
           Write-Host "[INFO] Starting deployment..."
-
+          
           # -------------------------------
           # Auth header
           # -------------------------------
@@ -29,45 +29,49 @@ jobs:
           $headers = @{ Authorization = "Basic $base64Auth" }
 
           # -------------------------------
-          # Function to get latest version folder
+          # Function to get latest artifact via Nexus REST API
           # -------------------------------
-          function Get-LatestTimestamp($artifactId) {
-              $artifactUrl = "${env:NEXUS_URL}/com/example/juiceshop/${artifactId}/"
-              Write-Host "[INFO] Listing folders for ${artifactId} at ${artifactUrl} ..."
+          function Get-LatestArtifact($artifactId) {
+              $apiUrl = "${env:NEXUS_URL}/service/rest/v1/assets?repository=JuiceShopMavenDemo&group=com.example.juiceshop&name=${artifactId}"
+              Write-Host "[INFO] Querying Nexus API for latest version of ${artifactId} ..."
+              
               try {
-                  $response = Invoke-WebRequest -Uri $artifactUrl -Headers $headers
-                  # Extract folder names (timestamps) from HTML links
-                  $links = ($response.ParsedHtml.getElementsByTagName("a") | ForEach-Object { $_.href.TrimEnd('/') })
-                  $timestamps = $links | Where-Object { $_ -match '^\d{14}$' } | Sort-Object -Descending
-                  if ($timestamps.Count -eq 0) { throw "No versions found" }
-                  return $timestamps[0]
+                  $response = Invoke-RestMethod -Uri $apiUrl -Headers $headers -UseBasicParsing
+                  if ($response.items.Count -eq 0) { throw "No versions found" }
+                  
+                  # Pick the artifact with the highest timestamp version
+                  $latest = $response.items | Sort-Object { [Version]$_.version } -Descending | Select-Object -First 1
+                  return $latest
               } catch {
-                  Write-Warning "[WARN] Cannot fetch folders for ${artifactId}"
+                  Write-Warning "[WARN] Cannot fetch artifact ${artifactId}: $_"
                   return $null
               }
           }
 
           # -------------------------------
-          # Function to download and deploy
+          # Function to download and deploy artifact
           # -------------------------------
-          function Deploy-Artifact($artifactId, $deployPath, $filePrefix) {
-              $latest = Get-LatestTimestamp ${artifactId}
-              if ($latest) {
-                  $zipUrl = "${env:NEXUS_URL}/com/example/juiceshop/${artifactId}/${latest}/${filePrefix}-${latest}.zip"
-                  Write-Host "[INFO] Downloading ${artifactId} from ${zipUrl} ..."
-                  $outFile = "${filePrefix}.zip"
-                  Invoke-WebRequest -Uri $zipUrl -OutFile $outFile -Headers $headers
+          function Deploy-Artifact($artifactId, $deployPath) {
+              $artifact = Get-LatestArtifact $artifactId
+              if ($artifact -ne $null) {
+                  $zipUrl = $artifact.downloadUrl
+                  $outFile = "${artifactId}.zip"
+                  
+                  Write-Host "[INFO] Downloading ${artifactId} from $zipUrl ..."
+                  Invoke-WebRequest -Uri $zipUrl -OutFile $outFile -Headers $headers -UseBasicParsing
+
                   Write-Host "[INFO] Extracting ${artifactId} to ${deployPath} ..."
                   Remove-Item -Recurse -Force "${deployPath}\*" -ErrorAction SilentlyContinue
                   Expand-Archive -Path $outFile -DestinationPath $deployPath -Force
-                  Write-Host "[SUCCESS] ${artifactId} deployed successfully. Version: ${latest}"
+
+                  Write-Host "[SUCCESS] ${artifactId} deployed successfully. Version: ${artifact.version}"
               }
           }
 
           # -------------------------------
           # Deploy frontend and server
           # -------------------------------
-          Deploy-Artifact "frontend-build" ${env:FRONTEND_PATH} "frontend-build"
-          Deploy-Artifact "server-build" ${env:SERVER_PATH} "server-build"
+          Deploy-Artifact "frontend-build" ${env:FRONTEND_PATH}
+          Deploy-Artifact "server-build" ${env:SERVER_PATH}
 
           Write-Host "✅ Deployment completed successfully!"
