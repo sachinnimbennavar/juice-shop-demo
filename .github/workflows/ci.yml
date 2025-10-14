@@ -34,8 +34,8 @@ jobs:
           # Helper: Get latest version from Nexus via REST API
           # -------------------------------
           function Get-LatestVersion($artifactId) {
-              $searchUrl = "${env:NEXUS_URL}/service/rest/v1/search?repository=JuiceShopMavenDemo&group=com.example.juiceshop&name=$artifactId"
-              Write-Host "[INFO] Searching Nexus for latest version of $artifactId ..."
+              $searchUrl = "${env:NEXUS_URL}/service/rest/v1/search?repository=JuiceShopMavenDemo&group=com.example.juiceshop&name=${artifactId}"
+              Write-Host "[INFO] Searching Nexus for latest version of ${artifactId} ..."
               
               try {
                   $response = Invoke-RestMethod -Uri $searchUrl -Headers $headers -UseBasicParsing
@@ -44,10 +44,10 @@ jobs:
 
                   # Sort numerically
                   $latestVersion = ($versions | ForEach-Object { [Version]$_ } | Sort-Object -Descending | Select-Object -First 1).ToString()
-                  Write-Host "[INFO] Latest version of $artifactId: $latestVersion"
+                  Write-Host "[INFO] Latest version of ${artifactId}: ${latestVersion}"
                   return $latestVersion
               } catch {
-                  Write-Warning "[WARN] Cannot fetch files for $artifactId. Falling back to local detection."
+                  Write-Warning "[WARN] Cannot fetch files for ${artifactId}. Falling back to local detection."
                   return $null
               }
           }
@@ -56,12 +56,12 @@ jobs:
           # Helper: Deploy artifact
           # -------------------------------
           function Deploy-Artifact($artifactId, $deployPath, $filePrefix) {
-              $version = Get-LatestVersion $artifactId
+              $version = Get-LatestVersion ${artifactId}
               if ($version) {
-                  $zipUrl = "${env:NEXUS_URL}/repository/JuiceShopMavenDemo/com/example/juiceshop/$artifactId/$version/$filePrefix-$version.zip"
-                  Write-Host "[INFO] Downloading $artifactId ZIP from $zipUrl ..."
+                  $zipUrl = "${env:NEXUS_URL}/repository/JuiceShopMavenDemo/com/example/juiceshop/${artifactId}/${version}/${filePrefix}-${version}.zip"
+                  Write-Host "[INFO] Downloading ${artifactId} ZIP from ${zipUrl} ..."
 
-                  $outFile = "$filePrefix.zip"
+                  $outFile = "${filePrefix}.zip"
                   $maxRetries = 3
                   for ($i=1; $i -le $maxRetries; $i++) {
                       try {
@@ -69,15 +69,15 @@ jobs:
                           break
                       } catch {
                           Write-Warning "[WARN] Download attempt $i failed: $_"
-                          if ($i -eq $maxRetries) { throw "Failed to download $artifactId after $maxRetries attempts" }
+                          if ($i -eq $maxRetries) { throw "Failed to download ${artifactId} after $maxRetries attempts" }
                           Start-Sleep -Seconds 5
                       }
                   }
 
-                  Write-Host "[INFO] Extracting $artifactId to $deployPath ..."
-                  Remove-Item -Recurse -Force "$deployPath\*" -ErrorAction SilentlyContinue
+                  Write-Host "[INFO] Extracting ${artifactId} to ${deployPath} ..."
+                  Remove-Item -Recurse -Force "${deployPath}\*" -ErrorAction SilentlyContinue
                   Expand-Archive -Path $outFile -DestinationPath $deployPath -Force
-                  Write-Host "[SUCCESS] $artifactId deployed successfully. Version: $version"
+                  Write-Host "[SUCCESS] ${artifactId} deployed successfully. Version: ${version}"
               }
           }
 
