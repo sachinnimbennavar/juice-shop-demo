@@ -24,49 +24,66 @@ jobs:
         run: |
           Write-Host "[INFO] Starting deployment..."
 
+          # -------------------------------
+          # Set up authentication header
+          # -------------------------------
           $base64Auth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
 
+          # -------------------------------
+          # Helper: Get latest version from Nexus
+          # -------------------------------
           function Get-LatestVersion($artifactId) {
               $artifactFolderUrl = "${env:NEXUS_URL}/com/example/juiceshop/$artifactId/"
               Write-Host "[INFO] Fetching available files from $artifactFolderUrl ..."
               
               try {
-                  $response = Invoke-RestMethod -Uri $artifactFolderUrl -Headers $headers
-                  $versions = ($response.links | Where-Object { $_.rel -eq "up" -or $_.href -match "^\d+$" }) | ForEach-Object { $_.href.TrimEnd('/') }
+                  $response = Invoke-RestMethod -Uri $artifactFolderUrl -Headers $headers -UseBasicParsing
+                  $versions = ($response.items | ForEach-Object { $_.text })  # JSON API response
                   if ($versions.Count -eq 0) { throw "No versions found" }
-                  $latestVersion = ($versions | Sort-Object -Descending)[0]
+
+                  # Sort numerically
+                  $latestVersion = ($versions | ForEach-Object { [Version]$_ } | Sort-Object -Descending | Select-Object -First 1).ToString()
                   return $latestVersion
               } catch {
-                  Write-Host "[WARN] Cannot fetch files for $artifactId. Falling back to local detection."
+                  Write-Warning "[WARN] Cannot fetch files for $artifactId. Falling back to local detection."
                   return $null
               }
           }
 
-          # ===== FRONTEND =====
-          $frontendVersion = Get-LatestVersion "frontend-build"
-          if ($frontendVersion) {
-              $frontendZipUrl = "${env:NEXUS_URL}/com/example/juiceshop/frontend-build/$frontendVersion/frontend-build-$frontendVersion.zip"
-              Write-Host "[INFO] Downloading frontend ZIP from $frontendZipUrl ..."
-              Invoke-WebRequest -Uri $frontendZipUrl -OutFile "frontend-build.zip" -Headers $headers
+          # -------------------------------
+          # Helper: Deploy artifact
+          # -------------------------------
+          function Deploy-Artifact($artifactId, $deployPath, $filePrefix) {
+              $version = Get-LatestVersion $artifactId
+              if ($version) {
+                  $zipUrl = "${env:NEXUS_URL}/com/example/juiceshop/$artifactId/$version/$filePrefix-$version.zip"
+                  Write-Host "[INFO] Downloading $artifactId ZIP from $zipUrl ..."
 
-              Write-Host "[INFO] Extracting frontend to ${env:FRONTEND_PATH} ..."
-              Remove-Item -Recurse -Force "${env:FRONTEND_PATH}\*" -ErrorAction SilentlyContinue
-              Expand-Archive -Path "frontend-build.zip" -DestinationPath ${env:FRONTEND_PATH} -Force
-              Write-Host "[SUCCESS] Frontend deployed successfully."
+                  $outFile = "$filePrefix.zip"
+                  $maxRetries = 3
+                  for ($i=1; $i -le $maxRetries; $i++) {
+                      try {
+                          Invoke-WebRequest -Uri $zipUrl -OutFile $outFile -Headers $headers -UseBasicParsing
+                          break
+                      } catch {
+                          Write-Warning "[WARN] Download attempt $i failed: $_"
+                          if ($i -eq $maxRetries) { throw "Failed to download $artifactId after $maxRetries attempts" }
+                          Start-Sleep -Seconds 5
+                      }
+                  }
+
+                  Write-Host "[INFO] Extracting $artifactId to $deployPath ..."
+                  Remove-Item -Recurse -Force "$deployPath\*" -ErrorAction SilentlyContinue
+                  Expand-Archive -Path $outFile -DestinationPath $deployPath -Force
+                  Write-Host "[SUCCESS] $artifactId deployed successfully. Version: $version"
+              }
           }
 
-          # ===== SERVER =====
-          $serverVersion = Get-LatestVersion "server-build"
-          if ($serverVersion) {
-              $serverZipUrl = "${env:NEXUS_URL}/com/example/juiceshop/server-build/$serverVersion/server-build-$serverVersion.zip"
-              Write-Host "[INFO] Downloading server ZIP from $serverZipUrl ..."
-              Invoke-WebRequest -Uri $serverZipUrl -OutFile "server-build.zip" -Headers $headers
-
-              Write-Host "[INFO] Extracting server to ${env:SERVER_PATH} ..."
-              Remove-Item -Recurse -Force "${env:SERVER_PATH}\*" -ErrorAction SilentlyContinue
-              Expand-Archive -Path "server-build.zip" -DestinationPath ${env:SERVER_PATH} -Force
-              Write-Host "[SUCCESS] Server deployed successfully."
-          }
+          # -------------------------------
+          # Deploy Frontend & Server
+          # -------------------------------
+          Deploy-Artifact "frontend-build" ${env:FRONTEND_PATH} "frontend-build"
+          Deploy-Artifact "server-build" ${env:SERVER_PATH} "server-build"
 
           Write-Host "✅ Deployment completed successfully!"
