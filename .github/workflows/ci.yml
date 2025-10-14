@@ -23,10 +23,11 @@ jobs:
           $base64Auth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
 
-          function Get-LatestFolder {
+          function Get-LatestZip {
               param ($artifactPath)
               $url = "$env:NEXUS_URL/com/example/juiceshop/${artifactPath}/"
-              Write-Host "[INFO] Fetching available versions from $url ..."
+              Write-Host "[INFO] Fetching available files from $url ..."
+
               try {
                   $html = Invoke-WebRequest -Uri $url -Headers $headers -UseBasicParsing
               } catch {
@@ -35,23 +36,23 @@ jobs:
                   exit 1
               }
 
-              # Extract 14-digit folder names (timestamps)
-              $folders = ($html.Links | ForEach-Object { $_.href } | Where-Object { $_ -match '^\d{14}/$' }) -replace '/$',''
-              if (-not $folders) {
-                  Write-Host "[ERROR] No version folders found in Nexus for ${artifactPath}!"
+              # Find all ZIP files matching artifact
+              $zipFiles = ($html.Links | ForEach-Object { $_.href } | Where-Object { $_ -match "^${artifactPath}-\d{14}\.zip$" })
+              if (-not $zipFiles) {
+                  Write-Host "[ERROR] No ZIP files found for ${artifactPath}!"
                   exit 1
               }
 
-              # Pick latest timestamp
-              $latest = ($folders | Sort-Object)[-1]
-              Write-Host "[INFO] Latest ${artifactPath} version detected: ${latest}"
-              return $latest
+              # Pick latest based on timestamp in filename
+              $latestZip = ($zipFiles | Sort-Object)[-1]
+              Write-Host "[INFO] Latest ${artifactPath} ZIP detected: ${latestZip}"
+              return $latestZip
           }
 
           function Deploy-Zip {
               param ($artifactPath, $deployPath)
-              $latestFolder = Get-LatestFolder -artifactPath $artifactPath
-              $zipUrl = "$env:NEXUS_URL/com/example/juiceshop/${artifactPath}/${latestFolder}/${artifactPath}-${latestFolder}.zip"
+              $latestZip = Get-LatestZip -artifactPath $artifactPath
+              $zipUrl = "$env:NEXUS_URL/com/example/juiceshop/${artifactPath}/${latestZip}"
               $tempZip = "$env:TEMP/${artifactPath}.zip"
 
               Write-Host "[INFO] Downloading ${artifactPath} from ${zipUrl} ..."
