@@ -21,7 +21,7 @@ jobs:
           SERVER_PATH: C:\JuiceShopServer
         run: |
           Write-Host "[INFO] Starting deployment..."
-          
+
           # -------------------------------
           # Auth header
           # -------------------------------
@@ -34,13 +34,18 @@ jobs:
           function Get-LatestArtifact($artifactId) {
               $apiUrl = "${env:NEXUS_URL}/service/rest/v1/assets?repository=JuiceShopMavenDemo&group=com.example.juiceshop&name=${artifactId}"
               Write-Host "[INFO] Querying Nexus API for latest version of ${artifactId} ..."
-              
+
               try {
                   $response = Invoke-RestMethod -Uri $apiUrl -Headers $headers -UseBasicParsing
+
                   if ($response.items.Count -eq 0) { throw "No versions found" }
-                  
-                  # Pick the artifact with the highest timestamp version
-                  $latest = $response.items | Sort-Object { [Version]$_.version } -Descending | Select-Object -First 1
+
+                  # Filter only ZIP artifacts
+                  $zipArtifacts = $response.items | Where-Object { $_.maven2.extension -eq "zip" }
+
+                  # Sort by version/timestamp descending
+                  $latest = $zipArtifacts | Sort-Object { [Version]$_.version } -Descending | Select-Object -First 1
+
                   return $latest
               } catch {
                   Write-Warning "[WARN] Cannot fetch artifact ${artifactId}: $_"
@@ -55,8 +60,9 @@ jobs:
               $artifact = Get-LatestArtifact $artifactId
               if ($artifact -ne $null) {
                   $zipUrl = $artifact.downloadUrl
+                  $version = $artifact.version
                   $outFile = "${artifactId}.zip"
-                  
+
                   Write-Host "[INFO] Downloading ${artifactId} from $zipUrl ..."
                   Invoke-WebRequest -Uri $zipUrl -OutFile $outFile -Headers $headers -UseBasicParsing
 
@@ -64,7 +70,9 @@ jobs:
                   Remove-Item -Recurse -Force "${deployPath}\*" -ErrorAction SilentlyContinue
                   Expand-Archive -Path $outFile -DestinationPath $deployPath -Force
 
-                  Write-Host "[SUCCESS] ${artifactId} deployed successfully. Version: ${artifact.version}"
+                  Write-Host "[SUCCESS] ${artifactId} deployed successfully. Version: ${version}"
+              } else {
+                  Write-Warning "[WARN] ${artifactId} deployment skipped: no artifact found"
               }
           }
 
