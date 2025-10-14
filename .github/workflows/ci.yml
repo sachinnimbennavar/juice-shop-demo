@@ -1,68 +1,18 @@
 name: Juice Shop CI - Upload to Maven Repo
 
 on:
-  push:
-    branches:
-      - main
-  workflow_dispatch:
+  workflow_dispatch:  # 👈 Run manually from GitHub Actions UI
 
 jobs:
-  build-and-upload:
+  upload-to-maven:
     runs-on: self-hosted
 
     steps:
-      # 1️⃣ Checkout code
+      # 1️⃣ Checkout code (still required to access the zips or dist folders)
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2️⃣ Setup Node memory
-      - name: Configure Node memory
-        run: set NODE_OPTIONS=--max_old_space_size=4096
-
-      # 3️⃣ Cache frontend dependencies
-      - name: Cache frontend dependencies
-        uses: actions/cache@v3
-        with:
-          path: |
-            frontend/node_modules
-            frontend/dist
-            frontend/.angular
-          key: ${{ runner.os }}-frontend-${{ hashFiles('frontend/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-frontend-
-
-      # 4️⃣ Cache server dependencies
-      - name: Cache server dependencies
-        uses: actions/cache@v3
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-server-${{ hashFiles('package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-server-
-
-      # 5️⃣ Install frontend dependencies
-      - name: Install frontend dependencies
-        run: |
-          cd frontend
-          npm install --legacy-peer-deps --prefer-offline --no-audit
-          cd ..
-
-      # 6️⃣ Build frontend
-      - name: Build frontend
-        run: |
-          cd frontend
-          npm run build -- --configuration production --watch=false --verbose
-          cd ..
-
-      # 7️⃣ Install server dependencies
-      - name: Install server dependencies
-        run: npm install --prefer-offline --no-audit
-
-      # 8️⃣ Build server
-      - name: Build server
-        run: npm run build:server
-
-      # 9️⃣ Upload ZIPs to Nexus Maven repo (no version folders)
+      # 2️⃣ Upload ZIPs to Maven repo
       - name: Upload build ZIPs to Nexus Maven repo
         shell: powershell
         env:
@@ -72,6 +22,9 @@ jobs:
         run: |
           Write-Host "🟢 Packaging and uploading build artifacts to Maven repo..."
 
+          # Create a timestamp-based version
+          $timestamp = (Get-Date -Format "yyyyMMddHHmmss")
+
           # Prepare Basic Auth header
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
@@ -79,11 +32,12 @@ jobs:
           # ===== FRONTEND =====
           if (Test-Path "frontend/dist") {
               Write-Host "[INFO] Packaging frontend build..."
-              Compress-Archive -Path "frontend/dist/*" -DestinationPath "frontend-build.zip" -Force
+              Compress-Archive -Path "frontend/dist/*" -DestinationPath "frontend-build-$timestamp.zip" -Force
 
+              # ⬇️ Upload without version folder (as per your new structure)
               $frontendUrl = "${env:NEXUS_URL}/com/example/juiceshop/frontend-build/frontend-build.zip"
               Write-Host "[INFO] Uploading frontend ZIP → $frontendUrl"
-              Invoke-RestMethod -Uri $frontendUrl -Method Put -InFile "frontend-build.zip" -Headers $headers
+              Invoke-RestMethod -Uri $frontendUrl -Method Put -InFile "frontend-build-$timestamp.zip" -Headers $headers
               Write-Host "[SUCCESS] Frontend uploaded successfully."
           } else {
               Write-Host "[WARN] frontend/dist not found, skipping frontend upload."
@@ -97,11 +51,12 @@ jobs:
 
           if ($serverPaths.Count -gt 0) {
               Write-Host "[INFO] Packaging server build..."
-              Compress-Archive -Path $serverPaths -DestinationPath "server-build.zip" -Force
+              Compress-Archive -Path $serverPaths -DestinationPath "server-build-$timestamp.zip" -Force
 
+              # ⬇️ Upload without version folder
               $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/server-build/server-build.zip"
               Write-Host "[INFO] Uploading server ZIP → $serverUrl"
-              Invoke-RestMethod -Uri $serverUrl -Method Put -InFile "server-build.zip" -Headers $headers
+              Invoke-RestMethod -Uri $serverUrl -Method Put -InFile "server-build-$timestamp.zip" -Headers $headers
               Write-Host "[SUCCESS] Server uploaded successfully."
           } else {
               Write-Host "[WARN] No server files found, skipping server upload."
