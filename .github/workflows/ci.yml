@@ -14,15 +14,21 @@ jobs:
           NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
           FRONTEND_PATH: C:\inetpub\wwwroot\juice-shop
           SERVER_PATH: C:\JuiceShopServer
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
           Write-Host "[INFO] Starting deployment..."
+
+          # Build Basic Auth header
+          $base64Auth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
+          $headers = @{ Authorization = "Basic $base64Auth" }
 
           function Get-LatestFolder {
               param ($artifactPath)
               $url = "$env:NEXUS_URL/com/example/juiceshop/${artifactPath}/"
               Write-Host "[INFO] Fetching available versions from $url ..."
               try {
-                  $html = Invoke-WebRequest -Uri $url -UseBasicParsing
+                  $html = Invoke-WebRequest -Uri $url -Headers $headers -UseBasicParsing
               } catch {
                   $errMsg = $_.Exception.Message
                   Write-Host "[ERROR] Failed to fetch ${artifactPath}: ${errMsg}"
@@ -50,7 +56,7 @@ jobs:
 
               Write-Host "[INFO] Downloading ${artifactPath} from ${zipUrl} ..."
               try {
-                  Invoke-WebRequest -Uri $zipUrl -OutFile $tempZip
+                  Invoke-WebRequest -Uri $zipUrl -OutFile $tempZip -Headers $headers
               } catch {
                   $errMsg = $_.Exception.Message
                   Write-Host "[ERROR] Failed to download ${artifactPath}: ${errMsg}"
