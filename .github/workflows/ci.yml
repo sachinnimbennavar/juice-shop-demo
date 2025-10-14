@@ -24,7 +24,8 @@ jobs:
               try {
                   $html = Invoke-WebRequest -Uri $url -UseBasicParsing
               } catch {
-                  Write-Host "[ERROR] Failed to fetch $artifactPath: $($_.Exception.Message)"
+                  $errMsg = $_.Exception.Message
+                  Write-Host "[ERROR] Failed to fetch $artifactPath: $errMsg"
                   exit 1
               }
 
@@ -48,7 +49,13 @@ jobs:
               $tempZip = "$env:TEMP\$artifactPath.zip"
 
               Write-Host "[INFO] Downloading $artifactPath from $zipUrl ..."
-              Invoke-WebRequest -Uri $zipUrl -OutFile $tempZip
+              try {
+                  Invoke-WebRequest -Uri $zipUrl -OutFile $tempZip
+              } catch {
+                  $errMsg = $_.Exception.Message
+                  Write-Host "[ERROR] Failed to download $artifactPath: $errMsg"
+                  exit 1
+              }
 
               Write-Host "[INFO] Extracting $artifactPath to $deployPath ..."
               if (Test-Path $deployPath) { Remove-Item -Recurse -Force $deployPath }
