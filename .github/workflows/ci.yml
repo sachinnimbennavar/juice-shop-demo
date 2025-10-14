@@ -19,7 +19,7 @@ jobs:
           echo "NEXUS_USERNAME=${{ secrets.NEXUS_USERNAME }}" >> $GITHUB_ENV
           echo "NEXUS_PASSWORD=${{ secrets.NEXUS_PASSWORD }}" >> $GITHUB_ENV
 
-      # 3️⃣ Deploy frontend and server
+      # 3️⃣ Deploy latest builds
       - name: Deploy latest builds
         shell: powershell
         run: |
@@ -32,20 +32,19 @@ jobs:
           # ===== FUNCTION: Get latest ZIP for artifact =====
           function Get-LatestArtifact {
               param(
-                  [string]$artifactId
+                  [string]$artifactId,
+                  [string]$baseUrl
               )
 
-              Write-Host "[INFO] Fetching available files from $($env:NEXUS_URL)/com/example/juiceshop/$artifactId/ ..."
+              Write-Host "[INFO] Fetching available files from $baseUrl ..."
               
               try {
-                  # List directory contents in Nexus (Maven2 layout)
-                  $filesHtml = Invoke-RestMethod -Uri "$($env:NEXUS_URL)/com/example/juiceshop/$artifactId/" -Headers $headers -UseBasicParsing
+                  $filesHtml = Invoke-RestMethod -Uri $baseUrl -Headers $headers -UseBasicParsing
               } catch {
                   Write-Warning "[WARN] Cannot fetch files for $artifactId. Falling back to local detection."
                   return $null
               }
 
-              # Extract all ZIP filenames from HTML
               $zipFiles = Select-String -InputObject $filesHtml -Pattern "href=`"(.+?\.zip)`"" | ForEach-Object {
                   $_.Matches[0].Groups[1].Value
               }
@@ -55,16 +54,16 @@ jobs:
                   return $null
               }
 
-              # Sort ZIPs by version (assuming timestamp in filename) and pick latest
               $latestZip = $zipFiles | Sort-Object { $_ -replace '.*-','' -as [long] } -Descending | Select-Object -First 1
               Write-Host "[INFO] Latest $artifactId ZIP found: $latestZip"
               return $latestZip
           }
 
           # ===== FRONTEND =====
-          $frontendZip = Get-LatestArtifact -artifactId "frontend-build"
+          $frontendBaseUrl = "$($env:NEXUS_URL)/com/example/juiceshop/frontend-build/"
+          $frontendZip = Get-LatestArtifact -artifactId "frontend-build" -baseUrl $frontendBaseUrl
           if ($frontendZip) {
-              $frontendUrl = "$($env:NEXUS_URL)/com/example/juiceshop/frontend-build/$frontendZip"
+              $frontendUrl = "$frontendBaseUrl$frontendZip"
               Write-Host "[INFO] Downloading frontend from $frontendUrl ..."
               Invoke-WebRequest -Uri $frontendUrl -OutFile "frontend-build.zip" -Headers $headers -UseBasicParsing
               
@@ -74,9 +73,10 @@ jobs:
           }
 
           # ===== SERVER =====
-          $serverZip = Get-LatestArtifact -artifactId "server-build"
+          $serverBaseUrl = "$($env:NEXUS_URL)/com/example/juiceshop/server-build/"
+          $serverZip = Get-LatestArtifact -artifactId "server-build" -baseUrl $serverBaseUrl
           if ($serverZip) {
-              $serverUrl = "$($env:NEXUS_URL)/com/example/juiceshop/server-build/$serverZip"
+              $serverUrl = "$serverBaseUrl$serverZip"
               Write-Host "[INFO] Downloading server from $serverUrl ..."
               Invoke-WebRequest -Uri $serverUrl -OutFile "server-build.zip" -Headers $headers -UseBasicParsing
               
