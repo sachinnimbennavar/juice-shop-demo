@@ -40,8 +40,8 @@ jobs:
 
                   if ($response.items.Count -eq 0) { throw "No versions found" }
 
-                  # Filter only ZIP artifacts
-                  $zipArtifacts = $response.items | Where-Object { $_.maven2.extension -eq "zip" }
+                  # Filter only ZIP artifacts AND correct artifactId
+                  $zipArtifacts = $response.items | Where-Object { $_.maven2.extension -eq "zip" -and $_.maven2.artifactId -eq $artifactId }
 
                   # Sort by version/timestamp descending
                   $latest = $zipArtifacts | Sort-Object { [Version]$_.version } -Descending | Select-Object -First 1
