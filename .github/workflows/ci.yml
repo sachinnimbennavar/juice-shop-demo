@@ -1,18 +1,16 @@
 name: Juice Shop CI - Upload to Maven Repo
 
 on:
-  workflow_dispatch:  # 👈 Manual trigger only
+  workflow_dispatch:  # Manual trigger only
 
 jobs:
   upload-to-maven:
     runs-on: self-hosted
 
     steps:
-      # 1️⃣ Checkout code (needed to access existing dist/build folders)
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2️⃣ Upload build ZIPs to Maven repo
       - name: Upload build ZIPs to Nexus Maven repo
         shell: powershell
         env:
@@ -22,26 +20,23 @@ jobs:
         run: |
           Write-Host "🟢 Packaging and uploading build artifacts to Maven repo..."
 
-          # Create a timestamp-based version for Maven layout
           $timestamp = (Get-Date -Format "yyyyMMddHHmmss")
-
-          # Prepare Basic Auth header
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
 
           # ===== FRONTEND =====
-          if (Test-Path "frontend/dist") {
-              Write-Host "[INFO] Packaging frontend build..."
-              Compress-Archive -Path "frontend/dist/*" -DestinationPath "frontend-build-$timestamp.zip" -Force
+          if (Test-Path "frontend-build") {
+              Write-Host "[INFO] Packaging frontend build from frontend-build folder..."
+              Compress-Archive -Path "frontend-build/*" -DestinationPath "frontend-build-$timestamp.zip" -Force
 
-              # ✅ Maven-compatible URL
               $frontendUrl = "${env:NEXUS_URL}/com/example/juiceshop/frontend-build/$timestamp/frontend-build-$timestamp.zip"
-
               Write-Host "[INFO] Uploading frontend ZIP → $frontendUrl"
               Invoke-RestMethod -Uri $frontendUrl -Method Put -InFile "frontend-build-$timestamp.zip" -Headers $headers -ContentType "application/zip"
               Write-Host "[SUCCESS] Frontend uploaded successfully."
           } else {
-              Write-Host "[WARN] frontend/dist not found, skipping frontend upload."
+              Write-Host "[WARN] frontend-build folder not found, skipping frontend upload."
+              Write-Host "[DEBUG] Listing current directory for troubleshooting:"
+              Get-ChildItem -Recurse -Depth 2 | Select-Object FullName
           }
 
           # ===== SERVER =====
@@ -54,9 +49,7 @@ jobs:
               Write-Host "[INFO] Packaging server build..."
               Compress-Archive -Path $serverPaths -DestinationPath "server-build-$timestamp.zip" -Force
 
-              # ✅ Maven-compatible URL
               $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/server-build/$timestamp/server-build-$timestamp.zip"
-
               Write-Host "[INFO] Uploading server ZIP → $serverUrl"
               Invoke-RestMethod -Uri $serverUrl -Method Put -InFile "server-build-$timestamp.zip" -Headers $headers -ContentType "application/zip"
               Write-Host "[SUCCESS] Server uploaded successfully."
