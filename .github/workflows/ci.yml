@@ -1,151 +1,88 @@
-name: Juice Shop Full Deploy & Upload
+name: Juice Shop CI - Deploy Latest Builds
 
 on:
-  workflow_dispatch:  # Manual trigger
+  workflow_dispatch:
 
 jobs:
-  full-deploy:
+  deploy:
     runs-on: self-hosted
-
-    env:
-      NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
-      NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
-      NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
 
     steps:
       # 1️⃣ Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2️⃣ Post-checkout repository
-      - name: Post-checkout repository
-        run: Write-Host "[INFO] Repository checked out."
-
-      # 3️⃣ Cache frontend dependencies
-      - name: Cache frontend dependencies
-        uses: actions/cache@v3
-        with:
-          path: |
-            frontend/node_modules
-            frontend/dist
-            frontend/.angular
-          key: ${{ runner.os }}-frontend-${{ hashFiles('frontend/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-frontend-
-
-      # 4️⃣ Cache server dependencies
-      - name: Cache server dependencies
-        uses: actions/cache@v3
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-server-${{ hashFiles('package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-server-
-
-      # 5️⃣ Upload frontend build to Nexus (optional)
-      - name: Upload frontend build
-        shell: powershell
+      # 2️⃣ Set Nexus credentials
+      - name: Set Nexus env
         run: |
-          Write-Host "[INFO] Upload frontend build to Nexus..."
-          $base64Auth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
-          $headers = @{ Authorization = "Basic $base64Auth" }
+          echo "NEXUS_URL=http://127.0.0.1:8081/repository/JuiceShopMavenDemo" >> $GITHUB_ENV
+          echo "NEXUS_USERNAME=${{ secrets.NEXUS_USERNAME }}" >> $GITHUB_ENV
+          echo "NEXUS_PASSWORD=${{ secrets.NEXUS_PASSWORD }}" >> $GITHUB_ENV
 
-          $frontendZip = Get-ChildItem -Path "./frontend" -Filter "frontend-build-*.zip" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-          if ($frontendZip) {
-              $buildVersion = ($frontendZip.BaseName -split "-")[-1]
-              $frontendUrl = "${env:NEXUS_URL}/com/example/juiceshop/frontend-build/$buildVersion/$($frontendZip.Name)"
-              Write-Host "[INFO] Uploading $($frontendZip.Name) → $frontendUrl"
-              Invoke-RestMethod -Uri $frontendUrl -Method Put -InFile $frontendZip.FullName -Headers $headers
-              Write-Host "[SUCCESS] Frontend uploaded successfully!"
-          } else {
-              Write-Host "[WARN] No frontend ZIP found for upload."
-          }
-
-      # 6️⃣ Upload server build to Nexus (optional)
-      - name: Upload server build
-        shell: powershell
-        run: |
-          Write-Host "[INFO] Upload server build to Nexus..."
-          $base64Auth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
-          $headers = @{ Authorization = "Basic $base64Auth" }
-
-          $serverZip = Get-ChildItem -Path "." -Filter "server-build-*.zip" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-          if ($serverZip) {
-              $buildVersion = ($serverZip.BaseName -split "-")[-1]
-              $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/server-build/$buildVersion/$($serverZip.Name)"
-              Write-Host "[INFO] Uploading $($serverZip.Name) → $serverUrl"
-              Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $serverZip.FullName -Headers $headers
-              Write-Host "[SUCCESS] Server uploaded successfully!"
-          } else {
-              Write-Host "[WARN] No server ZIP found for upload."
-          }
-
-      # 7️⃣ Deploy latest frontend & server from Nexus
+      # 3️⃣ Deploy frontend and server
       - name: Deploy latest builds
         shell: powershell
         run: |
           Write-Host "[INFO] Starting deployment..."
-          $base64Auth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
+
+          # Prepare Basic Auth
+          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
 
-          function Get-LatestVersion {
-              param ($artifactId)
-              $metadataUrl = "${env:NEXUS_URL}/com/example/juiceshop/${artifactId}/maven-metadata.xml"
+          # ===== FUNCTION: Get latest ZIP for artifact =====
+          function Get-LatestArtifact {
+              param(
+                  [string]$artifactId
+              )
+
+              Write-Host "[INFO] Fetching available files from $($env:NEXUS_URL)/com/example/juiceshop/$artifactId/ ..."
+              
               try {
-                  $metadata = Invoke-RestMethod -Uri $metadataUrl -Headers $headers
-                  return $metadata.metadata.versioning.latest
+                  # List directory contents in Nexus (Maven2 layout)
+                  $filesHtml = Invoke-RestMethod -Uri "$($env:NEXUS_URL)/com/example/juiceshop/$artifactId/" -Headers $headers -UseBasicParsing
               } catch {
-                  Write-Host "[WARN] Cannot fetch metadata for $artifactId. Falling back to latest ZIP in repo."
-                  $latestZip = Get-ChildItem -Path "." -Filter "$artifactId-*.zip" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-                  if ($latestZip) {
-                      return ($latestZip.BaseName -split "-")[-1]
-                  } else {
-                      throw "No $artifactId build found."
-                  }
+                  Write-Warning "[WARN] Cannot fetch files for $artifactId. Falling back to local detection."
+                  return $null
               }
+
+              # Extract all ZIP filenames from HTML
+              $zipFiles = Select-String -InputObject $filesHtml -Pattern "href=`"(.+?\.zip)`"" | ForEach-Object {
+                  $_.Matches[0].Groups[1].Value
+              }
+
+              if ($zipFiles.Count -eq 0) {
+                  Write-Warning "[WARN] No ZIP files found for $artifactId!"
+                  return $null
+              }
+
+              # Sort ZIPs by version (assuming timestamp in filename) and pick latest
+              $latestZip = $zipFiles | Sort-Object { $_ -replace '.*-','' -as [long] } -Descending | Select-Object -First 1
+              Write-Host "[INFO] Latest $artifactId ZIP found: $latestZip"
+              return $latestZip
           }
 
-          function Deploy-Zip {
-              param ($artifactId, $deployPath)
-              $latestVersion = Get-LatestVersion -artifactId $artifactId
-              $zipUrl = "${env:NEXUS_URL}/com/example/juiceshop/${artifactId}/${latestVersion}/${artifactId}-${latestVersion}.zip"
-              $tempZip = "$env:TEMP/${artifactId}.zip"
-
-              Write-Host "[INFO] Downloading $artifactId version $latestVersion ..."
-              Invoke-WebRequest -Uri $zipUrl -OutFile $tempZip -Headers $headers
-
-              if (Test-Path $deployPath) { Remove-Item -Recurse -Force $deployPath }
-              Expand-Archive -Path $tempZip -DestinationPath $deployPath
-              Remove-Item $tempZip
-
-              Write-Host "[SUCCESS] $artifactId deployed successfully to $deployPath"
+          # ===== FRONTEND =====
+          $frontendZip = Get-LatestArtifact -artifactId "frontend-build"
+          if ($frontendZip) {
+              $frontendUrl = "$($env:NEXUS_URL)/com/example/juiceshop/frontend-build/$frontendZip"
+              Write-Host "[INFO] Downloading frontend from $frontendUrl ..."
+              Invoke-WebRequest -Uri $frontendUrl -OutFile "frontend-build.zip" -Headers $headers -UseBasicParsing
+              
+              Write-Host "[INFO] Extracting frontend to C:\inetpub\wwwroot\juice-shop ..."
+              Expand-Archive -Path "frontend-build.zip" -DestinationPath "C:\inetpub\wwwroot\juice-shop" -Force
+              Write-Host "[SUCCESS] Frontend deployed successfully."
           }
 
-          # Deploy frontend
-          Deploy-Zip -artifactId "frontend-build" -deployPath "C:\inetpub\wwwroot\juice-shop"
+          # ===== SERVER =====
+          $serverZip = Get-LatestArtifact -artifactId "server-build"
+          if ($serverZip) {
+              $serverUrl = "$($env:NEXUS_URL)/com/example/juiceshop/server-build/$serverZip"
+              Write-Host "[INFO] Downloading server from $serverUrl ..."
+              Invoke-WebRequest -Uri $serverUrl -OutFile "server-build.zip" -Headers $headers -UseBasicParsing
+              
+              Write-Host "[INFO] Extracting server to C:\JuiceShopServer ..."
+              Expand-Archive -Path "server-build.zip" -DestinationPath "C:\JuiceShopServer" -Force
+              Write-Host "[SUCCESS] Server deployed successfully."
+          }
 
-          # Deploy server
-          Deploy-Zip -artifactId "server-build" -deployPath "C:\JuiceShopServer"
-
-          Write-Host "`n✅ Deployment completed successfully!"
-
-      # 8️⃣ Post-cache server dependencies
-      - name: Post-cache server dependencies
-        uses: actions/cache@v3
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-server-${{ hashFiles('package-lock.json') }}
-
-      # 9️⃣ Post-cache frontend dependencies
-      - name: Post-cache frontend dependencies
-        uses: actions/cache@v3
-        with:
-          path: |
-            frontend/node_modules
-            frontend/dist
-            frontend/.angular
-          key: ${{ runner.os }}-frontend-${{ hashFiles('frontend/package-lock.json') }}
-
-      # 🔟 Complete job
-      - name: Complete job
-        run: Write-Host "[INFO] Full deploy and upload job completed successfully!"
+          Write-Host "✅ Deployment completed successfully!"
