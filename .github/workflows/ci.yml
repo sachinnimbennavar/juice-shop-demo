@@ -1,4 +1,4 @@
-name: Juice Shop CD - Deploy from Maven Repo
+name: Juice Shop Deployment
 
 on:
   workflow_dispatch:
@@ -8,61 +8,68 @@ jobs:
     runs-on: self-hosted
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-
-      - name: Deploy Juice Shop from Nexus
+      - name: Deploy latest build from Nexus
         shell: powershell
         env:
-          NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
-          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
-          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+          NEXUS_URL: http://127.0.0.1:8081
+          REPOSITORY: JuiceShopMavenDemo
+          GROUP_ID: com.example.juiceshop
+          FRONTEND_ARTIFACT: frontend-build
+          SERVER_ARTIFACT: server-build
         run: |
           Write-Host "[INFO] Starting deployment..."
 
-          # Prepare auth
-          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
-          $headers = @{ Authorization = "Basic $base64Auth" }
+          $GroupId = $env:GROUP_ID
+          $Repo = $env:REPOSITORY
+          $BaseUrl = $env:NEXUS_URL
+          $Headers = @{ "Accept" = "application/json" }
 
-          # === Detect latest version automatically (list folders instead of metadata) ===
-          Write-Host "[INFO] Fetching available versions from Nexus..."
-          $listUrl = "${env:NEXUS_URL}/com/example/juiceshop/frontend-build/"
-          $html = Invoke-RestMethod -Uri $listUrl -Headers $headers -UseBasicParsing
+          # 🧠 Function: Fetch latest artifact using Nexus REST API
+          function Get-LatestArtifactUrl {
+              param ($artifact)
+              $SearchUrl = "$BaseUrl/service/rest/v1/search/assets?repository=$Repo&group=$GroupId&name=$artifact"
+              Write-Host "[INFO] Fetching latest $artifact from Nexus..."
+              try {
+                  $response = Invoke-RestMethod -Uri $SearchUrl -Headers $Headers -UseBasicParsing
+              } catch {
+                  Write-Host "[ERROR] Failed to query Nexus API: $($_.Exception.Message)"
+                  exit 1
+              }
 
-          # Extract version folders (timestamps)
-          $versions = ($html -split "`n" | Select-String -Pattern 'href="([0-9]{14})/' | ForEach-Object {
-              ($_ -match 'href="([0-9]{14})/') | Out-Null
-              $matches[1]
-          })
+              if (-not $response.items) {
+                  Write-Host "[ERROR] No artifacts found for $artifact in Nexus!"
+                  exit 1
+              }
 
-          if (-not $versions) {
-              Write-Host "[ERROR] No version folders found in Nexus!"
-              exit 1
+              $latest = $response.items | Sort-Object version | Select-Object -Last 1
+              Write-Host "[INFO] Latest version detected: $($latest.version)"
+              return $latest.downloadUrl
           }
 
-          $latestVersion = ($versions | Sort-Object | Select-Object -Last 1)
-          Write-Host "[INFO] Latest version detected: $latestVersion"
+          # 🧩 Function: Download + extract artifact
+          function Deploy-Artifact {
+              param ($artifactName, $downloadUrl, $targetPath)
+              $tempZip = "$env:TEMP\$artifactName.zip"
+              Write-Host "[INFO] Downloading $artifactName from $downloadUrl ..."
+              Invoke-WebRequest -Uri $downloadUrl -OutFile $tempZip
+              Write-Host "[INFO] Extracting $artifactName to $targetPath ..."
+              if (Test-Path $targetPath) { Remove-Item -Recurse -Force $targetPath }
+              Expand-Archive -Path $tempZip -DestinationPath $targetPath
+              Remove-Item $tempZip
+              Write-Host "[SUCCESS] $artifactName deployed successfully."
+          }
 
-          # === FRONTEND DEPLOY ===
-          $frontendZip = "frontend-build.zip"
-          $frontendUrl = "${env:NEXUS_URL}/com/example/juiceshop/frontend-build/$latestVersion/frontend-build-$latestVersion.zip"
-          Write-Host "[INFO] Downloading frontend from $frontendUrl ..."
-          Invoke-WebRequest -Uri $frontendUrl -OutFile $frontendZip -Headers $headers
+          # 🚀 Deploy both frontend and server automatically
+          try {
+              $frontendUrl = Get-LatestArtifactUrl -artifact $env:FRONTEND_ARTIFACT
+              Deploy-Artifact -artifactName "Frontend" -downloadUrl $frontendUrl -targetPath "C:\inetpub\wwwroot\juice-shop"
 
-          $frontendPath = "C:\inetpub\wwwroot\juice-shop"
-          if (Test-Path $frontendPath) { Remove-Item $frontendPath -Recurse -Force }
-          Expand-Archive -Path $frontendZip -DestinationPath $frontendPath -Force
-          Write-Host "[SUCCESS] Frontend deployed successfully."
+              $serverUrl = Get-LatestArtifactUrl -artifact $env:SERVER_ARTIFACT
+              Deploy-Artifact -artifactName "Server" -downloadUrl $serverUrl -targetPath "C:\JuiceShopServer"
 
-          # === SERVER DEPLOY ===
-          $serverZip = "server-build.zip"
-          $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/server-build/$latestVersion/server-build-$latestVersion.zip"
-          Write-Host "[INFO] Downloading server from $serverUrl ..."
-          Invoke-WebRequest -Uri $serverUrl -OutFile $serverZip -Headers $headers
-
-          $serverPath = "C:\JuiceShopServer"
-          if (Test-Path $serverPath) { Remove-Item $serverPath -Recurse -Force }
-          Expand-Archive -Path $serverZip -DestinationPath $serverPath -Force
-          Write-Host "[SUCCESS] Server deployed successfully."
-
-          Write-Host "✅ Deployment completed successfully!"
+              Write-Host "`n✅ Deployment completed successfully!"
+          }
+          catch {
+              Write-Host "[ERROR] Deployment failed: $($_.Exception.Message)"
+              exit 1
+          }
