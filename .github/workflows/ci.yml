@@ -1,7 +1,7 @@
 name: Juice Shop Deployment
 
 on:
-  workflow_dispatch:  # Manual trigger only
+  workflow_dispatch:
 
 jobs:
   deploy:
