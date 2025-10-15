@@ -1,7 +1,13 @@
+name: Juice Shop CI - Deploy Latest Builds
+
+on:
+  workflow_dispatch:   # manual trigger
+
+jobs:
   deploy:
     name: Deploy Latest Builds
     runs-on: windows-latest
-    needs: upload  # Wait for upload job
+    needs: upload  # assumes you have an "upload" job that runs before
 
     steps:
       - name: Checkout repository
@@ -63,7 +69,7 @@
               Test-Path "C:\deploy\server\package.json") {
               Write-Host "[SUCCESS] Deployment verified successfully."
           } else {
-              Write-Host "[ERROR] Deployment verification failed."
+              Write-Host "[ERROR] Deployment verification failed!"
               exit 1
           }
 
