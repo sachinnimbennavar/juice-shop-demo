@@ -8,7 +8,7 @@ jobs:
     runs-on: self-hosted
 
     env:
-      NEXUS_URL: http://10.158.124.198:8081/repository/JuiceShopMavenDemo
+      NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
       DEPLOY_PATH_FRONTEND: C:\inetpub\wwwroot\juice-shop
       DEPLOY_PATH_SERVER: C:\JuiceShopServer
 
@@ -17,33 +17,29 @@ jobs:
         uses: actions/checkout@v3
 
       - name: ⚙️ Setup PowerShell environment
-        shell: pwsh
+        shell: powershell
         run: |
           Write-Host "[INFO] Deployment job started..."
           Write-Host "Working directory: $PWD"
 
       - name: 🚀 Deploy from Nexus
-        shell: pwsh
+        shell: powershell
         env:
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+          BUILD_VERSION: 20251013115336   # 👈 Change version manually as per latest Nexus build
         run: |
           Write-Host "[INFO] Starting deployment..."
-
-          # Prepare Basic Auth header
-          $pair = "${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"
-          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes($pair))
+          
+          # Prepare Basic Auth
+          $base64Auth = [System.Convert]::ToBase64String(
+              [System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}")
+          )
           $headers = @{ Authorization = "Basic $base64Auth" }
 
           # === FRONTEND DEPLOYMENT ===
           try {
-              $frontendBaseUrl = "${env:NEXUS_URL}/com/example/juiceshop/frontend-build/"
-              $response = Invoke-WebRequest -Uri $frontendBaseUrl -Headers $headers
-              $folders = $response.Links | Where-Object { $_.href -match '^\d+/$' } | ForEach-Object { $_.href.TrimEnd('/') }
-              $latestFrontend = $folders | Sort-Object -Descending | Select-Object -First 1
-              Write-Host "[INFO] Latest frontend build: $latestFrontend"
-
-              $frontendUrl = "${env:NEXUS_URL}/com/example/juiceshop/frontend-build/$latestFrontend/frontend-build-$latestFrontend.zip"
+              $frontendUrl = "${env:NEXUS_URL}/com/example/juiceshop/frontend-build/$env:BUILD_VERSION/frontend-build-$env:BUILD_VERSION.zip"
               Write-Host "[INFO] Downloading frontend from $frontendUrl ..."
               Invoke-WebRequest -Uri $frontendUrl -OutFile "frontend.zip" -Headers $headers
 
@@ -57,20 +53,14 @@ jobs:
               }
           }
           catch {
-              Write-Host "[ERROR] Failed to download or extract frontend ZIP."
+              Write-Host "[ERROR] Failed to download frontend ZIP from Nexus."
               Write-Host $_.Exception.Message
               exit 1
           }
 
           # === SERVER DEPLOYMENT ===
           try {
-              $serverBaseUrl = "${env:NEXUS_URL}/com/example/juiceshop/server-build/"
-              $response = Invoke-WebRequest -Uri $serverBaseUrl -Headers $headers
-              $folders = $response.Links | Where-Object { $_.href -match '^\d+/$' } | ForEach-Object { $_.href.TrimEnd('/') }
-              $latestServer = $folders | Sort-Object -Descending | Select-Object -First 1
-              Write-Host "[INFO] Latest server build: $latestServer"
-
-              $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/server-build/$latestServer/server-build-$latestServer.zip"
+              $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/server-build/$env:BUILD_VERSION/server-build-$env:BUILD_VERSION.zip"
               Write-Host "[INFO] Downloading server from $serverUrl ..."
               Invoke-WebRequest -Uri $serverUrl -OutFile "server.zip" -Headers $headers
 
@@ -84,7 +74,7 @@ jobs:
               }
           }
           catch {
-              Write-Host "[ERROR] Failed to download or extract server ZIP."
+              Write-Host "[ERROR] Failed to download server ZIP from Nexus."
               Write-Host $_.Exception.Message
               exit 1
           }
