@@ -1,13 +1,12 @@
 name: Juice Shop CI - Deploy Latest Builds
 
 on:
-  workflow_dispatch:  # Manual trigger only
+  workflow_dispatch:  # Allows manual trigger
 
 jobs:
   deploy:
     name: Deploy Latest Builds
-    runs-on: self-hosted  # Must be on machine with Nexus access
-    needs: upload  # Wait for upload job
+    runs-on: windows-latest
 
     steps:
       - name: Checkout repository
@@ -17,42 +16,26 @@ jobs:
         run: |
           Write-Host "[INFO] Starting deployment..."
 
-      - name: Fetch latest versions from Nexus metadata
+      - name: Set environment variables
         run: |
-          $baseUrl = 'http://127.0.0.1:8081/repository/JuiceShopMavenDemo/com/example/juiceshop'
-          $creds = New-Object System.Management.Automation.PSCredential($env:NEXUS_USERNAME, (ConvertTo-SecureString $env:NEXUS_PASSWORD -AsPlainText -Force))
+          # Example: Replace these with your real versions or secrets
+          echo "FRONTEND_VERSION=20251015101652" >> $env:GITHUB_ENV
+          echo "SERVER_VERSION=20251015101652" >> $env:GITHUB_ENV
 
-          function Get-LatestVersion([string]$metadataUrl, [string]$artifactName) {
-              $metadataContent = (Invoke-WebRequest -Uri $metadataUrl -Credential $creds -UseBasicParsing).Content
-              $latest = [regex]::Matches($metadataContent, "<latest>(\d{14})</latest>")[0].Groups[1].Value
-              if (-not $latest) {
-                  Write-Host "[ERROR] Could not extract latest version for $artifactName"
-                  exit 1
-              }
-              Write-Host "[INFO] Latest version for $artifactName → $latest"
-              return $latest
-          }
-
-          $frontendVersion = Get-LatestVersion "$baseUrl/frontend-build/maven-metadata.xml" "frontend-build"
-          $serverVersion   = Get-LatestVersion "$baseUrl/server-build/maven-metadata.xml" "server-build"
-
-          Set-Content -Path $env:GITHUB_ENV -Value "FRONTEND_VERSION=$frontendVersion"
-          Add-Content -Path $env:GITHUB_ENV -Value "SERVER_VERSION=$serverVersion"
-
-      - name: Download and extract latest artifacts
+      - name: Download artifacts
         run: |
           $baseUrl = 'http://127.0.0.1:8081/repository/JuiceShopMavenDemo/com/example/juiceshop'
           $frontendUrl = "$baseUrl/frontend-build/${env:FRONTEND_VERSION}/frontend-build-${env:FRONTEND_VERSION}.zip"
           $serverUrl   = "$baseUrl/server-build/${env:SERVER_VERSION}/server-build-${env:SERVER_VERSION}.zip"
 
-          Write-Host "[INFO] Downloading frontend from: $frontendUrl"
-          Write-Host "[INFO] Downloading server from: $serverUrl"
+          Write-Host "[INFO] Downloading frontend: $frontendUrl"
+          Write-Host "[INFO] Downloading server: $serverUrl"
 
           New-Item -ItemType Directory -Force -Path "C:\deploy\frontend" | Out-Null
           New-Item -ItemType Directory -Force -Path "C:\deploy\server" | Out-Null
 
-          Invoke-WebRequest -Uri $frontendUrl -OutFile "frontend.zip" -Credential $creds
-          Invoke-WebRequest -Uri $serverUrl -OutFile "server.zip" -Credential $creds
+          Invoke-WebRequest $frontendUrl -OutFile "frontend.zip"
+          Invoke-WebRequest $serverUrl -OutFile "server.zip"
 
           Write-Host "[INFO] Extracting frontend..."
           Expand-Archive frontend.zip -DestinationPath "C:\deploy\frontend" -Force
@@ -62,8 +45,7 @@ jobs:
 
       - name: Verify deployment
         run: |
-          if (Test-Path "C:\deploy\frontend\frontend\index.html" -and
-              Test-Path "C:\deploy\server\package.json") {
+          if (Test-Path "C:\deploy\frontend\frontend\index.html" -and Test-Path "C:\deploy\server\package.json") {
               Write-Host "[SUCCESS] Deployment verified successfully."
           } else {
               Write-Host "[ERROR] Deployment verification failed."
