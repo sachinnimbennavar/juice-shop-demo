@@ -7,7 +7,6 @@ jobs:
   deploy:
     name: Deploy Latest Builds
     runs-on: windows-latest
-    needs: upload  # assumes you have an "upload" job that runs before
 
     steps:
       - name: Checkout repository
@@ -21,23 +20,23 @@ jobs:
         run: |
           $baseUrl = "http://127.0.0.1:8081/repository/JuiceShopMavenDemo/com/example/juiceshop"
 
-          Write-Host "[INFO] Reading latest version for frontend-build..."
-          $frontendMetadataUrl = "$baseUrl/frontend-build/maven-metadata.xml"
-          $frontendMetadata = Invoke-WebRequest $frontendMetadataUrl -UseBasicParsing
-          $frontendVersion = [regex]::Match($frontendMetadata.Content, "<latest>(\d{14})</latest>").Groups[1].Value
+          function Get-LatestVersion($metadataUrl, $artifactName) {
+              Write-Host "[INFO] Fetching metadata for $artifactName..."
+              $metadataContent = (Invoke-WebRequest $metadataUrl -UseBasicParsing).Content
+              $latest = [regex]::Match($metadataContent, "<latest>(\d{14})</latest>").Groups[1].Value
 
-          Write-Host "[INFO] Reading latest version for server-build..."
-          $serverMetadataUrl = "$baseUrl/server-build/maven-metadata.xml"
-          $serverMetadata = Invoke-WebRequest $serverMetadataUrl -UseBasicParsing
-          $serverVersion = [regex]::Match($serverMetadata.Content, "<latest>(\d{14})</latest>").Groups[1].Value
+              if (-not $latest) {
+                  Write-Host "[WARN] <latest> tag not found — using highest numeric version."
+                  $versions = [regex]::Matches($metadataContent, "<version>(\d{14})</version>") | ForEach-Object { $_.Groups[1].Value }
+                  $latest = ($versions | Sort-Object -Descending | Select-Object -First 1)
+              }
 
-          if (-not $frontendVersion -or -not $serverVersion) {
-              Write-Host "[ERROR] Could not extract version(s) from metadata!"
-              exit 1
+              Write-Host "[INFO] Latest version for $artifactName → $latest"
+              return $latest
           }
 
-          Write-Host "[INFO] Latest Frontend Version: $frontendVersion"
-          Write-Host "[INFO] Latest Server Version: $serverVersion"
+          $frontendVersion = Get-LatestVersion "$baseUrl/frontend-build/maven-metadata.xml" "frontend-build"
+          $serverVersion   = Get-LatestVersion "$baseUrl/server-build/maven-metadata.xml" "server-build"
 
           echo "FRONTEND_VERSION=$frontendVersion" >> $env:GITHUB_ENV
           echo "SERVER_VERSION=$serverVersion" >> $env:GITHUB_ENV
