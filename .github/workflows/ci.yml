@@ -9,7 +9,8 @@ jobs:
 
     env:
       NEXUS_URL: http://127.0.0.1:8081
-      DEPLOY_PATH: C:\inetpub\wwwroot\juice-shop
+      DEPLOY_PATH_FRONTEND: C:\inetpub\wwwroot\juice-shop
+      DEPLOY_PATH_SERVER: C:\JuiceShopServer
 
     steps:
       - name: 🧩 Checkout code
@@ -36,10 +37,10 @@ jobs:
 
           $frontendUrl = "$env:NEXUS_URL/repository/JuiceShopMavenDemo/com/example/juiceshop/frontend-build/$latestFrontend/frontend-build-$latestFrontend.zip"
           Invoke-WebRequest -Uri $frontendUrl -OutFile "frontend.zip" -Headers $headers
-          Expand-Archive -Path "frontend.zip" -DestinationPath "$env:DEPLOY_PATH" -Force
+          Expand-Archive -Path "frontend.zip" -DestinationPath "$env:DEPLOY_PATH_FRONTEND" -Force
           Write-Host "[SUCCESS] Frontend deployed."
 
-          # --- SERVER (same folder as frontend) ---
+          # --- SERVER ---
           $serverApi = "$env:NEXUS_URL/service/rest/v1/search?repository=JuiceShopMavenDemo&group=com.example.juiceshop&name=server-build"
           $serverResp = Invoke-RestMethod -Uri $serverApi -Headers $headers
           $latestServer = ($serverResp.items.version | Sort-Object -Descending | Select-Object -First 1)
@@ -47,7 +48,7 @@ jobs:
 
           $serverUrl = "$env:NEXUS_URL/repository/JuiceShopMavenDemo/com/example/juiceshop/server-build/$latestServer/server-build-$latestServer.zip"
           Invoke-WebRequest -Uri $serverUrl -OutFile "server.zip" -Headers $headers
-          Expand-Archive -Path "server.zip" -DestinationPath "$env:DEPLOY_PATH" -Force
+          Expand-Archive -Path "server.zip" -DestinationPath "$env:DEPLOY_PATH_SERVER" -Force
           Write-Host "[SUCCESS] Server deployed."
 
           Write-Host "✅ Deployment of latest build completed successfully!"
