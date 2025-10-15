@@ -14,14 +14,14 @@ jobs:
       - name: Download frontend build
         shell: pwsh
         run: |
-          $frontendUrl = "http://127.0.0.1:9000/repository/JuiceShopMavenDemo/com/example/juiceshop/frontend-build/20251015101652/frontend-build-20251015101652.zip"
+          $frontendUrl = "http://127.0.0.1:8081/repository/JuiceShopMavenDemo/com/example/juiceshop/frontend-build/20251015101652/frontend-build-20251015101652.zip"
           Write-Host "[INFO] Downloading frontend from: $frontendUrl"
           Invoke-WebRequest $frontendUrl -OutFile "frontend.zip"
 
       - name: Download server build
         shell: pwsh
         run: |
-          $serverUrl = "http://127.0.0.1:9000/repository/JuiceShopMavenDemo/com/example/juiceshop/server-build/20251015101652/server-build-20251015101652.zip"
+          $serverUrl = "http://127.0.0.1:8081/repository/JuiceShopMavenDemo/com/example/juiceshop/server-build/20251015101652/server-build-20251015101652.zip"
           Write-Host "[INFO] Downloading server from: $serverUrl"
           Invoke-WebRequest $serverUrl -OutFile "server.zip"
 
