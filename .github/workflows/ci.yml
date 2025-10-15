@@ -1,13 +1,12 @@
-name: Juice Shop CI - Deploy Latest Builds
+name: Juice Shop CI - Deploy Latest Builds (Self-Hosted)
 
 on:
-  workflow_dispatch:   # manual trigger
+  workflow_dispatch:  # manual trigger
 
 jobs:
   deploy:
     name: Deploy Latest Builds
-    runs-on: windows-latest
-
+    runs-on: self-hosted  # <-- Runs on your own Windows machine
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -50,22 +49,25 @@ jobs:
           Write-Host "[INFO] Downloading frontend from: $frontendUrl"
           Write-Host "[INFO] Downloading server from: $serverUrl"
 
-          New-Item -ItemType Directory -Force -Path "C:\deploy\frontend" | Out-Null
-          New-Item -ItemType Directory -Force -Path "C:\deploy\server" | Out-Null
+          $deployFrontend = "C:\deploy\frontend"
+          $deployServer   = "C:\deploy\server"
+
+          New-Item -ItemType Directory -Force -Path $deployFrontend | Out-Null
+          New-Item -ItemType Directory -Force -Path $deployServer | Out-Null
 
           Invoke-WebRequest $frontendUrl -OutFile "frontend.zip"
           Invoke-WebRequest $serverUrl -OutFile "server.zip"
 
           Write-Host "[INFO] Extracting frontend..."
-          Expand-Archive frontend.zip -DestinationPath "C:\deploy\frontend" -Force
+          Expand-Archive frontend.zip -DestinationPath $deployFrontend -Force
 
           Write-Host "[INFO] Extracting server..."
-          Expand-Archive server.zip -DestinationPath "C:\deploy\server" -Force
+          Expand-Archive server.zip -DestinationPath $deployServer -Force
 
       - name: Verify deployment
         run: |
-          if (Test-Path "C:\deploy\frontend\frontend\index.html" -and
-              Test-Path "C:\deploy\server\package.json") {
+          if (Test-Path "$deployFrontend\frontend\index.html" -and
+              Test-Path "$deployServer\package.json") {
               Write-Host "[SUCCESS] Deployment verified successfully."
           } else {
               Write-Host "[ERROR] Deployment verification failed!"
