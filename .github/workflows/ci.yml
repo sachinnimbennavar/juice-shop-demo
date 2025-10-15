@@ -8,73 +8,67 @@ jobs:
     runs-on: self-hosted
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: 🟢 Starting Deployment
         shell: powershell
-        run: Write-Host "[INFO] Starting deployment..."
+        run: Write-Host '[INFO] Starting deployment...'
 
-      - name: Fetch latest versions from Nexus metadata
+      - name: Fetch latest versions from Nexus
         shell: powershell
         run: |
-          $baseUrl = "http://127.0.0.1:8081/repository/JuiceShopMavenDemo/com/example/juiceshop"
+          $baseUrl = 'http://127.0.0.1:8081/repository/JuiceShopMavenDemo/com/example/juiceshop'
 
-          function Get-LatestVersion([string]$metadataUrl, [string]$artifactName) {
-              Write-Host "[INFO] Fetching metadata for $artifactName..."
+          function Get-LatestVersion([string]$metadataUrl) {
               $metadataContent = (Invoke-WebRequest -Uri $metadataUrl -UseBasicParsing).Content
               $latest = [regex]::Match($metadataContent, '<latest>(\d{14})</latest>').Groups[1].Value
 
               if (-not $latest) {
-                  Write-Host "[WARN] <latest> tag not found — using highest numeric version."
                   $versions = [regex]::Matches($metadataContent, '<version>(\d{14})</version>') | ForEach-Object { $_.Groups[1].Value }
                   $latest = ($versions | Sort-Object -Descending | Select-Object -First 1)
               }
 
-              Write-Host "[INFO] Latest version for $artifactName -> $latest"
               return $latest
           }
 
-          $frontendVersion = Get-LatestVersion "$baseUrl/frontend-build/maven-metadata.xml" "frontend-build"
-          $serverVersion   = Get-LatestVersion "$baseUrl/server-build/maven-metadata.xml" "server-build"
+          $frontendVersion = Get-LatestVersion "$baseUrl/frontend-build/maven-metadata.xml"
+          $serverVersion   = Get-LatestVersion "$baseUrl/server-build/maven-metadata.xml"
 
-          Add-Content -Path $env:GITHUB_ENV -Value "FRONTEND_VERSION=$frontendVersion"
+          Set-Content -Path $env:GITHUB_ENV -Value "FRONTEND_VERSION=$frontendVersion"
           Add-Content -Path $env:GITHUB_ENV -Value "SERVER_VERSION=$serverVersion"
 
-      - name: Download and extract latest artifacts
+          Write-Host "[INFO] Frontend Version: $frontendVersion"
+          Write-Host "[INFO] Server Version: $serverVersion"
+
+      - name: Download and extract builds
         shell: powershell
         run: |
-          $baseUrl = "http://127.0.0.1:8081/repository/JuiceShopMavenDemo/com/example/juiceshop"
-          $frontendUrl = "$baseUrl/frontend-build/${env:FRONTEND_VERSION}/frontend-build-${env:FRONTEND_VERSION}.zip"
-          $serverUrl   = "$baseUrl/server-build/${env:SERVER_VERSION}/server-build-${env:SERVER_VERSION}.zip"
-
-          Write-Host "[INFO] Downloading frontend from: $frontendUrl"
-          Write-Host "[INFO] Downloading server from: $serverUrl"
-
-          $deployFrontend = "C:\deploy\frontend"
-          $deployServer   = "C:\deploy\server"
+          $deployFrontend = 'C:\deploy\frontend'
+          $deployServer   = 'C:\deploy\server'
 
           New-Item -ItemType Directory -Force -Path $deployFrontend | Out-Null
           New-Item -ItemType Directory -Force -Path $deployServer | Out-Null
 
-          Invoke-WebRequest $frontendUrl -OutFile "frontend.zip"
-          Invoke-WebRequest $serverUrl -OutFile "server.zip"
+          $frontendUrl = "http://127.0.0.1:8081/repository/JuiceShopMavenDemo/com/example/juiceshop/frontend-build/${env:FRONTEND_VERSION}/frontend-build-${env:FRONTEND_VERSION}.zip"
+          $serverUrl   = "http://127.0.0.1:8081/repository/JuiceShopMavenDemo/com/example/juiceshop/server-build/${env:SERVER_VERSION}/server-build-${env:SERVER_VERSION}.zip"
 
-          Write-Host "[INFO] Extracting frontend..."
-          Expand-Archive frontend.zip -DestinationPath $deployFrontend -Force
+          Invoke-WebRequest -Uri $frontendUrl -OutFile 'frontend.zip'
+          Invoke-WebRequest -Uri $serverUrl   -OutFile 'server.zip'
 
-          Write-Host "[INFO] Extracting server..."
-          Expand-Archive server.zip -DestinationPath $deployServer -Force
+          Expand-Archive -Path 'frontend.zip' -DestinationPath $deployFrontend -Force
+          Expand-Archive -Path 'server.zip'   -DestinationPath $deployServer -Force
 
       - name: Verify deployment
         shell: powershell
         run: |
-          if (Test-Path "$deployFrontend\frontend\index.html" -and Test-Path "$deployServer\package.json") {
-              Write-Host "[SUCCESS] Deployment verified successfully."
+          if ((Test-Path "$deployFrontend\frontend\index.html") -and (Test-Path "$deployServer\package.json")) {
+              Write-Host '[SUCCESS] Deployment verified successfully.'
           } else {
-              Write-Host "[ERROR] Deployment verification failed!"
+              Write-Host '[ERROR] Deployment verification failed!'
               exit 1
           }
 
-      - name: ✅ Deployment completed
+      - name: Deployment Completed
         shell: powershell
-        run: Write-Host "[SUCCESS] Latest builds deployed successfully!"
+        run: Write-Host '[SUCCESS] Latest builds deployed successfully!'
