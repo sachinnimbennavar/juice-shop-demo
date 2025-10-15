@@ -1,87 +1,75 @@
 name: Juice Shop CI - Deploy Latest Builds
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # Manual trigger only
 
 jobs:
   deploy:
-    runs-on: windows-latest
+    name: Deploy Latest Builds
+    runs-on: self-hosted  # Must be on machine with Nexus access
+    needs: upload  # Wait for upload job
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: 🟢 Start Deployment
-        shell: powershell
-        run: Write-Host '[INFO] Starting deployment...'
+      - name: 🟢 Starting Deployment
+        run: |
+          Write-Host "[INFO] Starting deployment..."
 
-      - name: Fetch latest versions from Nexus
-        shell: powershell
-        env:
-          NEXUS_USER: ${{ secrets.NEXUS_USERNAME }}
-          NEXUS_PASS: ${{ secrets.NEXUS_PASSWORD }}
+      - name: Fetch latest versions from Nexus metadata
         run: |
           $baseUrl = 'http://127.0.0.1:8081/repository/JuiceShopMavenDemo/com/example/juiceshop'
-          $creds = New-Object System.Management.Automation.PSCredential($env:NEXUS_USER,(ConvertTo-SecureString $env:NEXUS_PASS -AsPlainText -Force))
+          $creds = New-Object System.Management.Automation.PSCredential($env:NEXUS_USERNAME, (ConvertTo-SecureString $env:NEXUS_PASSWORD -AsPlainText -Force))
 
-          function Get-LatestVersion([string]$metadataUrl) {
-              $content = (Invoke-WebRequest -Uri $metadataUrl -Credential $creds -UseBasicParsing).Content
-              $latest = [regex]::Match($content,'<latest>(\d{14})</latest>').Groups[1].Value
+          function Get-LatestVersion([string]$metadataUrl, [string]$artifactName) {
+              $metadataContent = (Invoke-WebRequest -Uri $metadataUrl -Credential $creds -UseBasicParsing).Content
+              $latest = [regex]::Matches($metadataContent, "<latest>(\d{14})</latest>")[0].Groups[1].Value
               if (-not $latest) {
-                  $versions = [regex]::Matches($content,'<version>(\d{14})</version>') | ForEach-Object { $_.Groups[1].Value }
-                  $latest = ($versions | Sort-Object -Descending | Select-Object -First 1)
+                  Write-Host "[ERROR] Could not extract latest version for $artifactName"
+                  exit 1
               }
+              Write-Host "[INFO] Latest version for $artifactName → $latest"
               return $latest
           }
 
-          $frontendVersion = Get-LatestVersion "$baseUrl/frontend-build/maven-metadata.xml"
-          $serverVersion   = Get-LatestVersion "$baseUrl/server-build/maven-metadata.xml"
+          $frontendVersion = Get-LatestVersion "$baseUrl/frontend-build/maven-metadata.xml" "frontend-build"
+          $serverVersion   = Get-LatestVersion "$baseUrl/server-build/maven-metadata.xml" "server-build"
 
           Set-Content -Path $env:GITHUB_ENV -Value "FRONTEND_VERSION=$frontendVersion"
           Add-Content -Path $env:GITHUB_ENV -Value "SERVER_VERSION=$serverVersion"
 
-          Write-Host "[INFO] Latest Frontend: $frontendVersion"
-          Write-Host "[INFO] Latest Server: $serverVersion"
-
-      - name: Download and Extract Builds
-        shell: powershell
-        env:
-          NEXUS_USER: ${{ secrets.NEXUS_USERNAME }}
-          NEXUS_PASS: ${{ secrets.NEXUS_PASSWORD }}
+      - name: Download and extract latest artifacts
         run: |
-          $deployFrontend = 'C:\deploy\frontend'
-          $deployServer   = 'C:\deploy\server'
+          $baseUrl = 'http://127.0.0.1:8081/repository/JuiceShopMavenDemo/com/example/juiceshop'
+          $frontendUrl = "$baseUrl/frontend-build/${env:FRONTEND_VERSION}/frontend-build-${env:FRONTEND_VERSION}.zip"
+          $serverUrl   = "$baseUrl/server-build/${env:SERVER_VERSION}/server-build-${env:SERVER_VERSION}.zip"
 
-          New-Item -ItemType Directory -Force -Path $deployFrontend | Out-Null
-          New-Item -ItemType Directory -Force -Path $deployServer | Out-Null
+          Write-Host "[INFO] Downloading frontend from: $frontendUrl"
+          Write-Host "[INFO] Downloading server from: $serverUrl"
 
-          $frontendUrl = "http://127.0.0.1:8081/repository/JuiceShopMavenDemo/com/example/juiceshop/frontend-build/${env:FRONTEND_VERSION}/frontend-build-${env:FRONTEND_VERSION}.zip"
-          $serverUrl   = "http://127.0.0.1:8081/repository/JuiceShopMavenDemo/com/example/juiceshop/server-build/${env:SERVER_VERSION}/server-build-${env:SERVER_VERSION}.zip"
+          New-Item -ItemType Directory -Force -Path "C:\deploy\frontend" | Out-Null
+          New-Item -ItemType Directory -Force -Path "C:\deploy\server" | Out-Null
 
-          $creds = New-Object System.Management.Automation.PSCredential($env:NEXUS_USER,(ConvertTo-SecureString $env:NEXUS_PASS -AsPlainText -Force))
-
-          Write-Host "[INFO] Downloading frontend..."
-          Invoke-WebRequest -Uri $frontendUrl -OutFile 'frontend.zip' -Credential $creds
-
-          Write-Host "[INFO] Downloading server..."
-          Invoke-WebRequest -Uri $serverUrl -OutFile 'server.zip' -Credential $creds
+          Invoke-WebRequest -Uri $frontendUrl -OutFile "frontend.zip" -Credential $creds
+          Invoke-WebRequest -Uri $serverUrl -OutFile "server.zip" -Credential $creds
 
           Write-Host "[INFO] Extracting frontend..."
-          Expand-Archive -Path 'frontend.zip' -DestinationPath $deployFrontend -Force
+          Expand-Archive frontend.zip -DestinationPath "C:\deploy\frontend" -Force
 
           Write-Host "[INFO] Extracting server..."
-          Expand-Archive -Path 'server.zip' -DestinationPath $deployServer -Force
+          Expand-Archive server.zip -DestinationPath "C:\deploy\server" -Force
 
-      - name: Verify Deployment
-        shell: powershell
+      - name: Verify deployment
         run: |
-          if ((Test-Path "C:\deploy\frontend\frontend\index.html") -and (Test-Path "C:\deploy\server\package.json")) {
-              Write-Host '[SUCCESS] Deployment verified successfully.'
+          if (Test-Path "C:\deploy\frontend\frontend\index.html" -and
+              Test-Path "C:\deploy\server\package.json") {
+              Write-Host "[SUCCESS] Deployment verified successfully."
           } else {
-              Write-Host '[ERROR] Deployment verification failed!'
+              Write-Host "[ERROR] Deployment verification failed."
               exit 1
           }
 
-      - name: ✅ Deployment Completed
-        shell: powershell
-        run: Write-Host '[SUCCESS] Latest builds deployed successfully!'
+      - name: ✅ Deployment completed
+        run: |
+          Write-Host "[SUCCESS] Latest builds deployed successfully!"
