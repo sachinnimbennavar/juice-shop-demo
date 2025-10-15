@@ -5,7 +5,7 @@ on:
 
 jobs:
   download-builds:
-    runs-on: windows-latest
+    runs-on: self-hosted  # Uses your self-hosted runner on the VM
 
     steps:
       - name: Checkout repo
@@ -26,4 +26,5 @@ jobs:
           Invoke-WebRequest $serverUrl -OutFile "server.zip"
 
       - name: List downloaded files
+        shell: pwsh
         run: dir
