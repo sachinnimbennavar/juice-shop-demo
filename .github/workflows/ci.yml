@@ -1,28 +1,26 @@
 name: Juice Shop CI - Deploy Latest Builds (Self-Hosted)
 
 on:
-  workflow_dispatch:  # manual trigger
+  workflow_dispatch:
 
 jobs:
   deploy:
-    name: Deploy Latest Builds
-    runs-on: self-hosted  # Run on your local Windows machine
+    runs-on: self-hosted
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: 🟢 Starting Deployment
-        run: |
-          Write-Host "[INFO] Starting deployment..."
+        shell: powershell
+        run: Write-Host "[INFO] Starting deployment..."
 
       - name: Fetch latest versions from Nexus metadata
         shell: powershell
         run: |
           $baseUrl = "http://127.0.0.1:8081/repository/JuiceShopMavenDemo/com/example/juiceshop"
 
-          function Get-LatestVersion($metadataUrl, $artifactName) {
+          function Get-LatestVersion([string]$metadataUrl, [string]$artifactName) {
               Write-Host "[INFO] Fetching metadata for $artifactName..."
-              $metadataContent = (Invoke-WebRequest $metadataUrl -UseBasicParsing).Content
+              $metadataContent = (Invoke-WebRequest -Uri $metadataUrl -UseBasicParsing).Content
               $latest = [regex]::Match($metadataContent, '<latest>(\d{14})</latest>').Groups[1].Value
 
               if (-not $latest) {
@@ -38,8 +36,14 @@ jobs:
           $frontendVersion = Get-LatestVersion "$baseUrl/frontend-build/maven-metadata.xml" "frontend-build"
           $serverVersion   = Get-LatestVersion "$baseUrl/server-build/maven-metadata.xml" "server-build"
 
-          echo "FRONTEND_VERSION=$frontendVersion" >> $env:GITHUB_ENV
-          echo "SERVER_VERSION=$serverVersion" >> $env:GITHUB_ENV
+          # Set GitHub Actions environment variables
+          Add-Content -Path $env:GITHUB_ENV -Value "FRONTEND_VERSION=$frontendVersion"
+          Add-Content -Path $env:GITHUB_ENV -Value "SERVER_VERSION=$serverVersion"
+
+          # Log deployed versions locally
+          $historyFile = "C:\deploy\deployment_history.txt"
+          New-Item -ItemType File -Force -Path $historyFile | Out-Null
+          Add-Content -Path $historyFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - FRONTEND: $frontendVersion, SERVER: $serverVersion"
 
       - name: Download and extract latest artifacts
         shell: powershell
@@ -69,8 +73,7 @@ jobs:
       - name: Verify deployment
         shell: powershell
         run: |
-          if (Test-Path "$deployFrontend\frontend\index.html" -and
-              Test-Path "$deployServer\package.json") {
+          if (Test-Path "$deployFrontend\frontend\index.html" -and Test-Path "$deployServer\package.json") {
               Write-Host "[SUCCESS] Deployment verified successfully."
           } else {
               Write-Host "[ERROR] Deployment verification failed!"
@@ -79,5 +82,4 @@ jobs:
 
       - name: ✅ Deployment completed
         shell: powershell
-        run: |
-          Write-Host "[SUCCESS] Latest builds deployed successfully!"
+        run: Write-Host "[SUCCESS] Latest builds deployed successfully!"
