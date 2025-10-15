@@ -16,12 +16,9 @@ jobs:
         id: frontend
         run: |
           $frontendBaseUrl = "http://10.158.124.198:8081/repository/JuiceShopMavenDemo/com/example/juiceshop/frontend-build/"
-          $latestFolder = (Invoke-WebRequest $frontendBaseUrl).Content -split "`n" | 
-                          Where-Object { $_ -match "href=\"" } | 
-                          ForEach-Object { ($_ -split '"')[1] } |
-                          Where-Object { $_ -match "\d+/" } | 
-                          Sort-Object -Descending | Select-Object -First 1
-          $latestFolder = $latestFolder.TrimEnd("/")
+          $response = Invoke-WebRequest -Uri $frontendBaseUrl
+          $folders = $response.Links | Where-Object { $_.href -match '^\d+/$' } | ForEach-Object { $_.href.TrimEnd('/') }
+          $latestFolder = $folders | Sort-Object -Descending | Select-Object -First 1
           Write-Host "Latest frontend build: $latestFolder"
           echo "::set-output name=version::$latestFolder"
 
@@ -38,12 +35,9 @@ jobs:
         id: server
         run: |
           $serverBaseUrl = "http://10.158.124.198:8081/repository/JuiceShopMavenDemo/com/example/juiceshop/server-build/"
-          $latestFolder = (Invoke-WebRequest $serverBaseUrl).Content -split "`n" | 
-                          Where-Object { $_ -match "href=\"" } | 
-                          ForEach-Object { ($_ -split '"')[1] } |
-                          Where-Object { $_ -match "\d+/" } | 
-                          Sort-Object -Descending | Select-Object -First 1
-          $latestFolder = $latestFolder.TrimEnd("/")
+          $response = Invoke-WebRequest -Uri $serverBaseUrl
+          $folders = $response.Links | Where-Object { $_.href -match '^\d+/$' } | ForEach-Object { $_.href.TrimEnd('/') }
+          $latestFolder = $folders | Sort-Object -Descending | Select-Object -First 1
           Write-Host "Latest server build: $latestFolder"
           echo "::set-output name=version::$latestFolder"
 
