@@ -6,7 +6,7 @@ on:
 jobs:
   deploy:
     name: Deploy Latest Builds
-    runs-on: self-hosted  # <-- Runs on your own Windows machine
+    runs-on: self-hosted  # Run on your local Windows machine
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -16,21 +16,22 @@ jobs:
           Write-Host "[INFO] Starting deployment..."
 
       - name: Fetch latest versions from Nexus metadata
+        shell: powershell
         run: |
           $baseUrl = "http://127.0.0.1:8081/repository/JuiceShopMavenDemo/com/example/juiceshop"
 
           function Get-LatestVersion($metadataUrl, $artifactName) {
               Write-Host "[INFO] Fetching metadata for $artifactName..."
               $metadataContent = (Invoke-WebRequest $metadataUrl -UseBasicParsing).Content
-              $latest = [regex]::Match($metadataContent, "<latest>(\d{14})</latest>").Groups[1].Value
+              $latest = [regex]::Match($metadataContent, '<latest>(\d{14})</latest>').Groups[1].Value
 
               if (-not $latest) {
                   Write-Host "[WARN] <latest> tag not found — using highest numeric version."
-                  $versions = [regex]::Matches($metadataContent, "<version>(\d{14})</version>") | ForEach-Object { $_.Groups[1].Value }
+                  $versions = [regex]::Matches($metadataContent, '<version>(\d{14})</version>') | ForEach-Object { $_.Groups[1].Value }
                   $latest = ($versions | Sort-Object -Descending | Select-Object -First 1)
               }
 
-              Write-Host "[INFO] Latest version for $artifactName → $latest"
+              Write-Host "[INFO] Latest version for $artifactName -> $latest"
               return $latest
           }
 
@@ -41,6 +42,7 @@ jobs:
           echo "SERVER_VERSION=$serverVersion" >> $env:GITHUB_ENV
 
       - name: Download and extract latest artifacts
+        shell: powershell
         run: |
           $baseUrl = "http://127.0.0.1:8081/repository/JuiceShopMavenDemo/com/example/juiceshop"
           $frontendUrl = "$baseUrl/frontend-build/${env:FRONTEND_VERSION}/frontend-build-${env:FRONTEND_VERSION}.zip"
@@ -65,6 +67,7 @@ jobs:
           Expand-Archive server.zip -DestinationPath $deployServer -Force
 
       - name: Verify deployment
+        shell: powershell
         run: |
           if (Test-Path "$deployFrontend\frontend\index.html" -and
               Test-Path "$deployServer\package.json") {
@@ -75,5 +78,6 @@ jobs:
           }
 
       - name: ✅ Deployment completed
+        shell: powershell
         run: |
           Write-Host "[SUCCESS] Latest builds deployed successfully!"
