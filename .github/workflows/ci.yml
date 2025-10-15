@@ -18,8 +18,8 @@ jobs:
       - name: Fetch latest versions from Nexus
         shell: powershell
         env:
-          NEXUS_USER: ${{ secrets.NEXUS_USER }}
-          NEXUS_PASS: ${{ secrets.NEXUS_PASS }}
+          NEXUS_USER: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASS: ${{ secrets.NEXUS_PASSWORD }}
         run: |
           $baseUrl = 'http://127.0.0.1:8081/repository/JuiceShopMavenDemo/com/example/juiceshop'
           $creds = New-Object System.Management.Automation.PSCredential($env:NEXUS_USER,(ConvertTo-SecureString $env:NEXUS_PASS -AsPlainText -Force))
@@ -46,8 +46,8 @@ jobs:
       - name: Download and Extract Builds
         shell: powershell
         env:
-          NEXUS_USER: ${{ secrets.NEXUS_USER }}
-          NEXUS_PASS: ${{ secrets.NEXUS_PASS }}
+          NEXUS_USER: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASS: ${{ secrets.NEXUS_PASSWORD }}
         run: |
           $deployFrontend = 'C:\deploy\frontend'
           $deployServer   = 'C:\deploy\server'
