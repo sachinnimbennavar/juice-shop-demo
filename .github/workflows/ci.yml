@@ -1,4 +1,4 @@
-name: Juice Shop CI - Deploy Latest Builds (Self-Hosted)
+name: Juice Shop CI - Deploy Latest Builds
 
 on:
   workflow_dispatch:
@@ -6,6 +6,7 @@ on:
 jobs:
   deploy:
     runs-on: self-hosted
+
     steps:
       - uses: actions/checkout@v4
 
@@ -38,12 +39,6 @@ jobs:
 
           Add-Content -Path $env:GITHUB_ENV -Value "FRONTEND_VERSION=$frontendVersion"
           Add-Content -Path $env:GITHUB_ENV -Value "SERVER_VERSION=$serverVersion"
-
-          # Log deployed versions safely
-          $historyFile = "C:\deploy\deployment_history.txt"
-          if (-not (Test-Path $historyFile)) { New-Item -ItemType File -Force -Path $historyFile | Out-Null }
-          $logLine = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + ' - FRONTEND: ' + $frontendVersion + ', SERVER: ' + $serverVersion
-          Add-Content -Path $historyFile -Value $logLine
 
       - name: Download and extract latest artifacts
         shell: powershell
