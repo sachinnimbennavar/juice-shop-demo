@@ -5,30 +5,32 @@ on:
 
 jobs:
   deploy:
-    runs-on: self-hosted
+    runs-on: windows-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: 🟢 Starting Deployment
+      - name: 🟢 Start Deployment
         shell: powershell
         run: Write-Host '[INFO] Starting deployment...'
 
       - name: Fetch latest versions from Nexus
         shell: powershell
+        env:
+          NEXUS_USER: ${{ secrets.NEXUS_USER }}
+          NEXUS_PASS: ${{ secrets.NEXUS_PASS }}
         run: |
           $baseUrl = 'http://127.0.0.1:8081/repository/JuiceShopMavenDemo/com/example/juiceshop'
+          $creds = New-Object System.Management.Automation.PSCredential($env:NEXUS_USER,(ConvertTo-SecureString $env:NEXUS_PASS -AsPlainText -Force))
 
           function Get-LatestVersion([string]$metadataUrl) {
-              $metadataContent = (Invoke-WebRequest -Uri $metadataUrl -UseBasicParsing).Content
-              $latest = [regex]::Match($metadataContent, '<latest>(\d{14})</latest>').Groups[1].Value
-
+              $content = (Invoke-WebRequest -Uri $metadataUrl -Credential $creds -UseBasicParsing).Content
+              $latest = [regex]::Match($content,'<latest>(\d{14})</latest>').Groups[1].Value
               if (-not $latest) {
-                  $versions = [regex]::Matches($metadataContent, '<version>(\d{14})</version>') | ForEach-Object { $_.Groups[1].Value }
+                  $versions = [regex]::Matches($content,'<version>(\d{14})</version>') | ForEach-Object { $_.Groups[1].Value }
                   $latest = ($versions | Sort-Object -Descending | Select-Object -First 1)
               }
-
               return $latest
           }
 
@@ -38,11 +40,14 @@ jobs:
           Set-Content -Path $env:GITHUB_ENV -Value "FRONTEND_VERSION=$frontendVersion"
           Add-Content -Path $env:GITHUB_ENV -Value "SERVER_VERSION=$serverVersion"
 
-          Write-Host "[INFO] Frontend Version: $frontendVersion"
-          Write-Host "[INFO] Server Version: $serverVersion"
+          Write-Host "[INFO] Latest Frontend: $frontendVersion"
+          Write-Host "[INFO] Latest Server: $serverVersion"
 
-      - name: Download and extract builds
+      - name: Download and Extract Builds
         shell: powershell
+        env:
+          NEXUS_USER: ${{ secrets.NEXUS_USER }}
+          NEXUS_PASS: ${{ secrets.NEXUS_PASS }}
         run: |
           $deployFrontend = 'C:\deploy\frontend'
           $deployServer   = 'C:\deploy\server'
@@ -53,22 +58,30 @@ jobs:
           $frontendUrl = "http://127.0.0.1:8081/repository/JuiceShopMavenDemo/com/example/juiceshop/frontend-build/${env:FRONTEND_VERSION}/frontend-build-${env:FRONTEND_VERSION}.zip"
           $serverUrl   = "http://127.0.0.1:8081/repository/JuiceShopMavenDemo/com/example/juiceshop/server-build/${env:SERVER_VERSION}/server-build-${env:SERVER_VERSION}.zip"
 
-          Invoke-WebRequest -Uri $frontendUrl -OutFile 'frontend.zip'
-          Invoke-WebRequest -Uri $serverUrl   -OutFile 'server.zip'
+          $creds = New-Object System.Management.Automation.PSCredential($env:NEXUS_USER,(ConvertTo-SecureString $env:NEXUS_PASS -AsPlainText -Force))
 
+          Write-Host "[INFO] Downloading frontend..."
+          Invoke-WebRequest -Uri $frontendUrl -OutFile 'frontend.zip' -Credential $creds
+
+          Write-Host "[INFO] Downloading server..."
+          Invoke-WebRequest -Uri $serverUrl -OutFile 'server.zip' -Credential $creds
+
+          Write-Host "[INFO] Extracting frontend..."
           Expand-Archive -Path 'frontend.zip' -DestinationPath $deployFrontend -Force
-          Expand-Archive -Path 'server.zip'   -DestinationPath $deployServer -Force
 
-      - name: Verify deployment
+          Write-Host "[INFO] Extracting server..."
+          Expand-Archive -Path 'server.zip' -DestinationPath $deployServer -Force
+
+      - name: Verify Deployment
         shell: powershell
         run: |
-          if ((Test-Path "$deployFrontend\frontend\index.html") -and (Test-Path "$deployServer\package.json")) {
+          if ((Test-Path "C:\deploy\frontend\frontend\index.html") -and (Test-Path "C:\deploy\server\package.json")) {
               Write-Host '[SUCCESS] Deployment verified successfully.'
           } else {
               Write-Host '[ERROR] Deployment verification failed!'
               exit 1
           }
 
-      - name: Deployment Completed
+      - name: ✅ Deployment Completed
         shell: powershell
         run: Write-Host '[SUCCESS] Latest builds deployed successfully!'
