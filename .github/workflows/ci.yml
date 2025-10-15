@@ -1,51 +1,29 @@
-name: Juice Shop CI - Deploy Latest Builds
+name: Juice Shop CI - Download Local Builds
 
 on:
-  workflow_dispatch: # manual trigger only
+  workflow_dispatch:  # Manual trigger
 
 jobs:
-  deploy:
-    name: Deploy Latest Builds
+  download-builds:
     runs-on: windows-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v3
 
-      - name: 🟢 Starting Deployment
+      - name: Download frontend build
+        shell: pwsh
         run: |
-          Write-Host "[INFO] Starting deployment..."
-
-      - name: Download frontend and server builds
-        run: |
-          $frontendUrl = "http://10.158.124.198:9000/repository/JuiceShopMavenDemo/com/example/juiceshop/frontend-build/20251015101652/frontend-build-20251015101652.zip"
-          $serverUrl   = "http://10.158.124.198:9000/repository/JuiceShopMavenDemo/com/example/juiceshop/server-build/20251015101652/server-build-20251015101652.zip"
-
+          $frontendUrl = "http://127.0.0.1:9000/repository/JuiceShopMavenDemo/com/example/juiceshop/frontend-build/20251015101652/frontend-build-20251015101652.zip"
           Write-Host "[INFO] Downloading frontend from: $frontendUrl"
-          Write-Host "[INFO] Downloading server from: $serverUrl"
-
-          New-Item -ItemType Directory -Force -Path "C:\deploy\frontend" | Out-Null
-          New-Item -ItemType Directory -Force -Path "C:\deploy\server" | Out-Null
-
           Invoke-WebRequest $frontendUrl -OutFile "frontend.zip"
+
+      - name: Download server build
+        shell: pwsh
+        run: |
+          $serverUrl = "http://127.0.0.1:9000/repository/JuiceShopMavenDemo/com/example/juiceshop/server-build/20251015101652/server-build-20251015101652.zip"
+          Write-Host "[INFO] Downloading server from: $serverUrl"
           Invoke-WebRequest $serverUrl -OutFile "server.zip"
 
-          Write-Host "[INFO] Extracting frontend..."
-          Expand-Archive frontend.zip -DestinationPath "C:\deploy\frontend" -Force
-
-          Write-Host "[INFO] Extracting server..."
-          Expand-Archive server.zip -DestinationPath "C:\deploy\server" -Force
-
-      - name: Verify deployment
-        run: |
-          if (Test-Path "C:\deploy\frontend\frontend\index.html" -and
-              Test-Path "C:\deploy\server\package.json") {
-              Write-Host "[SUCCESS] Deployment verified successfully."
-          } else {
-              Write-Host "[ERROR] Deployment verification failed."
-              exit 1
-          }
-
-      - name: ✅ Deployment completed
-        run: |
-          Write-Host "[SUCCESS] Latest builds deployed successfully!"
+      - name: List downloaded files
+        run: dir
