@@ -1,36 +1,53 @@
-- name: 🚀 Deploy latest build from Nexus
-  shell: powershell
-  env:
-    NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
-    NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
-  run: |
-    Write-Host "[INFO] Starting deployment..."
+name: Juice Shop Deployment
 
-    # Prepare Basic Auth
-    $pair = "${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"
-    $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes($pair))
-    $headers = @{ Authorization = "Basic $base64Auth" }
+on:
+  workflow_dispatch:  # Manual trigger only
 
-    # --- FRONTEND ---
-    $frontendApi = "$env:NEXUS_URL/service/rest/v1/search?repository=JuiceShopMavenDemo&group=com.example.juiceshop&name=frontend-build"
-    $frontendResp = Invoke-RestMethod -Uri $frontendApi -Headers $headers
-    $latestFrontend = ($frontendResp.items.version | Sort-Object -Descending | Select-Object -First 1)
-    Write-Host "[INFO] Latest frontend build: $latestFrontend"
+jobs:
+  deploy:
+    runs-on: self-hosted
 
-    $frontendUrl = "$env:NEXUS_URL/repository/JuiceShopMavenDemo/com/example/juiceshop/frontend-build/$latestFrontend/frontend-build-$latestFrontend.zip"
-    Invoke-WebRequest -Uri $frontendUrl -OutFile "frontend.zip" -Headers $headers
-    Expand-Archive -Path "frontend.zip" -DestinationPath "$env:DEPLOY_PATH_FRONTEND" -Force
-    Write-Host "[SUCCESS] Frontend deployed."
+    env:
+      NEXUS_URL: http://127.0.0.1:8081
+      DEPLOY_PATH: C:\inetpub\wwwroot\juice-shop
 
-    # --- SERVER (extract in same path as frontend) ---
-    $serverApi = "$env:NEXUS_URL/service/rest/v1/search?repository=JuiceShopMavenDemo&group=com.example.juiceshop&name=server-build"
-    $serverResp = Invoke-RestMethod -Uri $serverApi -Headers $headers
-    $latestServer = ($serverResp.items.version | Sort-Object -Descending | Select-Object -First 1)
-    Write-Host "[INFO] Latest server build: $latestServer"
+    steps:
+      - name: 🧩 Checkout code
+        uses: actions/checkout@v3
 
-    $serverUrl = "$env:NEXUS_URL/repository/JuiceShopMavenDemo/com/example/juiceshop/server-build/$latestServer/server-build-$latestServer.zip"
-    Invoke-WebRequest -Uri $serverUrl -OutFile "server.zip" -Headers $headers
-    Expand-Archive -Path "server.zip" -DestinationPath "$env:DEPLOY_PATH_FRONTEND" -Force
-    Write-Host "[SUCCESS] Server deployed."
+      - name: 🚀 Deploy latest build from Nexus
+        shell: powershell
+        env:
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+        run: |
+          Write-Host "[INFO] Starting deployment..."
 
-    Write-Host "✅ Deployment of latest build completed successfully!"
+          # Prepare Basic Auth
+          $pair = "${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"
+          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes($pair))
+          $headers = @{ Authorization = "Basic $base64Auth" }
+
+          # --- FRONTEND ---
+          $frontendApi = "$env:NEXUS_URL/service/rest/v1/search?repository=JuiceShopMavenDemo&group=com.example.juiceshop&name=frontend-build"
+          $frontendResp = Invoke-RestMethod -Uri $frontendApi -Headers $headers
+          $latestFrontend = ($frontendResp.items.version | Sort-Object -Descending | Select-Object -First 1)
+          Write-Host "[INFO] Latest frontend build: $latestFrontend"
+
+          $frontendUrl = "$env:NEXUS_URL/repository/JuiceShopMavenDemo/com/example/juiceshop/frontend-build/$latestFrontend/frontend-build-$latestFrontend.zip"
+          Invoke-WebRequest -Uri $frontendUrl -OutFile "frontend.zip" -Headers $headers
+          Expand-Archive -Path "frontend.zip" -DestinationPath "$env:DEPLOY_PATH" -Force
+          Write-Host "[SUCCESS] Frontend deployed."
+
+          # --- SERVER (same folder as frontend) ---
+          $serverApi = "$env:NEXUS_URL/service/rest/v1/search?repository=JuiceShopMavenDemo&group=com.example.juiceshop&name=server-build"
+          $serverResp = Invoke-RestMethod -Uri $serverApi -Headers $headers
+          $latestServer = ($serverResp.items.version | Sort-Object -Descending | Select-Object -First 1)
+          Write-Host "[INFO] Latest server build: $latestServer"
+
+          $serverUrl = "$env:NEXUS_URL/repository/JuiceShopMavenDemo/com/example/juiceshop/server-build/$latestServer/server-build-$latestServer.zip"
+          Invoke-WebRequest -Uri $serverUrl -OutFile "server.zip" -Headers $headers
+          Expand-Archive -Path "server.zip" -DestinationPath "$env:DEPLOY_PATH" -Force
+          Write-Host "[SUCCESS] Server deployed."
+
+          Write-Host "✅ Deployment of latest build completed successfully!"
