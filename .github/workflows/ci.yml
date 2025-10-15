@@ -1,25 +1,68 @@
 name: Juice Shop CI - Upload to Maven Repo
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
-  upload-to-maven:
+  build-and-upload:
     runs-on: self-hosted
 
     steps:
-      # 1️⃣ Checkout repository
+      # 1️⃣ Checkout code
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2️⃣ Build frontend
-      - name: Build Frontend
-        working-directory: frontend   # adjust if your frontend folder is different
-        run: |
-          npm install
-          npm run build
+      # 2️⃣ Setup Node memory
+      - name: Configure Node memory
+        run: set NODE_OPTIONS=--max_old_space_size=4096
 
-      # 3️⃣ Upload build ZIPs to Nexus
+      # 3️⃣ Cache frontend dependencies
+      - name: Cache frontend dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            frontend/node_modules
+            frontend/dist
+            frontend/.angular
+          key: ${{ runner.os }}-frontend-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-frontend-
+
+      # 4️⃣ Cache server dependencies
+      - name: Cache server dependencies
+        uses: actions/cache@v3
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-server-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-server-
+
+      # 5️⃣ Install frontend dependencies
+      - name: Install frontend dependencies
+        run: |
+          cd frontend
+          npm install --legacy-peer-deps --prefer-offline --no-audit
+          cd ..
+
+      # 6️⃣ Build frontend
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm run build -- --configuration production --watch=false --verbose
+          cd ..
+
+      # 7️⃣ Install server dependencies
+      - name: Install server dependencies
+        run: npm install --prefer-offline --no-audit
+
+      # 8️⃣ Build server
+      - name: Build server
+        run: npm run build:server
+
+      # 9️⃣ Upload ZIPs to Maven repo
       - name: Upload build ZIPs to Nexus Maven repo
         shell: powershell
         env:
@@ -27,35 +70,26 @@ jobs:
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
-          Write-Host "🟢 Packaging and uploading build artifacts..."
+          Write-Host "🟢 Packaging and uploading build artifacts to Maven repo..."
+
+          # Create a timestamp-based version
           $timestamp = (Get-Date -Format "yyyyMMddHHmmss")
 
           # Prepare Basic Auth header
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
 
-          Add-Type -AssemblyName System.IO.Compression.FileSystem
-
           # ===== FRONTEND =====
-          # Update path to your frontend build output
-          $frontendPaths = @("frontend/build") | Where-Object { Test-Path $_ }
-
-          if ($frontendPaths.Count -gt 0) {
+          if (Test-Path "frontend/dist") {
               Write-Host "[INFO] Packaging frontend build..."
-              Compress-Archive -Path $frontendPaths -DestinationPath "frontend-build-$timestamp.zip" -Force
-
-              # Debug: list ZIP contents
-              Write-Host "[DEBUG] Frontend ZIP contents:"
-              $zip = [System.IO.Compression.ZipFile]::OpenRead("frontend-build-$timestamp.zip")
-              $zip.Entries | ForEach-Object { Write-Host $_.FullName }
-              $zip.Dispose()
+              Compress-Archive -Path "frontend/dist/*" -DestinationPath "frontend-build-$timestamp.zip" -Force
 
               $frontendUrl = "${env:NEXUS_URL}/com/example/juiceshop/frontend-build/$timestamp/frontend-build-$timestamp.zip"
               Write-Host "[INFO] Uploading frontend ZIP → $frontendUrl"
-              Invoke-RestMethod -Uri $frontendUrl -Method Put -InFile "frontend-build-$timestamp.zip" -Headers $headers -ContentType "application/zip"
+              Invoke-RestMethod -Uri $frontendUrl -Method Put -InFile "frontend-build-$timestamp.zip" -Headers $headers
               Write-Host "[SUCCESS] Frontend uploaded successfully."
           } else {
-              Write-Host "[WARN] No frontend build files found at the specified path."
+              Write-Host "[WARN] frontend/dist not found, skipping frontend upload."
           }
 
           # ===== SERVER =====
@@ -68,18 +102,12 @@ jobs:
               Write-Host "[INFO] Packaging server build..."
               Compress-Archive -Path $serverPaths -DestinationPath "server-build-$timestamp.zip" -Force
 
-              # Debug: list ZIP contents
-              Write-Host "[DEBUG] Server ZIP contents:"
-              $zip = [System.IO.Compression.ZipFile]::OpenRead("server-build-$timestamp.zip")
-              $zip.Entries | ForEach-Object { Write-Host $_.FullName }
-              $zip.Dispose()
-
               $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/server-build/$timestamp/server-build-$timestamp.zip"
               Write-Host "[INFO] Uploading server ZIP → $serverUrl"
-              Invoke-RestMethod -Uri $serverUrl -Method Put -InFile "server-build-$timestamp.zip" -Headers $headers -ContentType "application/zip"
+              Invoke-RestMethod -Uri $serverUrl -Method Put -InFile "server-build-$timestamp.zip" -Headers $headers
               Write-Host "[SUCCESS] Server uploaded successfully."
           } else {
-              Write-Host "[WARN] No server files found."
+              Write-Host "[WARN] No server files found, skipping server upload."
           }
 
-          Write-Host "✅ All builds uploaded successfully!"
+          Write-Host "✅ All available builds uploaded to Maven repo successfully!"
