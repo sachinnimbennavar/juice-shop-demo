@@ -1,27 +1,57 @@
-name: Juice Shop CI - Download Builds from Local VM
+name: Juice Shop CI - Download Latest Builds
 
 on:
   workflow_dispatch:  # Manual trigger
 
 jobs:
   download-builds:
-    runs-on: self-hosted  # Uses your self-hosted runner on the VM
+    runs-on: self-hosted  # Self-hosted runner on your VM
 
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Download frontend build
+      - name: Get latest frontend build version
+        shell: pwsh
+        id: frontend
+        run: |
+          $frontendBaseUrl = "http://10.158.124.198:8081/repository/JuiceShopMavenDemo/com/example/juiceshop/frontend-build/"
+          $latestFolder = (Invoke-WebRequest $frontendBaseUrl).Content -split "`n" | 
+                          Where-Object { $_ -match "href=\"" } | 
+                          ForEach-Object { ($_ -split '"')[1] } |
+                          Where-Object { $_ -match "\d+/" } | 
+                          Sort-Object -Descending | Select-Object -First 1
+          $latestFolder = $latestFolder.TrimEnd("/")
+          Write-Host "Latest frontend build: $latestFolder"
+          echo "::set-output name=version::$latestFolder"
+
+      - name: Download latest frontend build
         shell: pwsh
         run: |
-          $frontendUrl = "http://10.158.124.198:8081/repository/JuiceShopMavenDemo/com/example/juiceshop/frontend-build/20251015101652/frontend-build-20251015101652.zip"
+          $frontendVersion = "${{ steps.frontend.outputs.version }}"
+          $frontendUrl = "http://10.158.124.198:8081/repository/JuiceShopMavenDemo/com/example/juiceshop/frontend-build/$frontendVersion/frontend-build-$frontendVersion.zip"
           Write-Host "[INFO] Downloading frontend from: $frontendUrl"
           Invoke-WebRequest $frontendUrl -OutFile "frontend.zip"
 
-      - name: Download server build
+      - name: Get latest server build version
+        shell: pwsh
+        id: server
+        run: |
+          $serverBaseUrl = "http://10.158.124.198:8081/repository/JuiceShopMavenDemo/com/example/juiceshop/server-build/"
+          $latestFolder = (Invoke-WebRequest $serverBaseUrl).Content -split "`n" | 
+                          Where-Object { $_ -match "href=\"" } | 
+                          ForEach-Object { ($_ -split '"')[1] } |
+                          Where-Object { $_ -match "\d+/" } | 
+                          Sort-Object -Descending | Select-Object -First 1
+          $latestFolder = $latestFolder.TrimEnd("/")
+          Write-Host "Latest server build: $latestFolder"
+          echo "::set-output name=version::$latestFolder"
+
+      - name: Download latest server build
         shell: pwsh
         run: |
-          $serverUrl = "http://10.158.124.198:8081/repository/JuiceShopMavenDemo/com/example/juiceshop/server-build/20251015101652/server-build-20251015101652.zip"
+          $serverVersion = "${{ steps.server.outputs.version }}"
+          $serverUrl = "http://10.158.124.198:8081/repository/JuiceShopMavenDemo/com/example/juiceshop/server-build/$serverVersion/server-build-$serverVersion.zip"
           Write-Host "[INFO] Downloading server from: $serverUrl"
           Invoke-WebRequest $serverUrl -OutFile "server.zip"
 
