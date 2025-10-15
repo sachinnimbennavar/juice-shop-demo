@@ -1,13 +1,12 @@
 name: Juice Shop CI - Deploy Latest Builds
 
 on:
-  workflow_dispatch:  # Allows manual trigger
+  workflow_dispatch:  # Manual trigger
 
 jobs:
   deploy:
     name: Deploy Latest Builds
-    runs-on: windows-latest
-
+    runs-on: self-hosted  # must be inside your network to access Nexus
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -16,15 +15,36 @@ jobs:
         run: |
           Write-Host "[INFO] Starting deployment..."
 
-      - name: Set environment variables
+      - name: Fetch latest versions from Nexus metadata
+        shell: pwsh
+        env:
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
-          # Example: Replace these with your real versions or secrets
-          echo "FRONTEND_VERSION=20251015101652" >> $env:GITHUB_ENV
-          echo "SERVER_VERSION=20251015101652" >> $env:GITHUB_ENV
+          $baseUrl = "http://10.158.124.198:9000/repository/JuiceShopMavenDemo/com/example/juiceshop"
+          $creds = New-Object System.Management.Automation.PSCredential($env:NEXUS_USERNAME,(ConvertTo-SecureString $env:NEXUS_PASSWORD -AsPlainText -Force))
 
-      - name: Download artifacts
+          function Get-LatestVersion([string]$metadataUrl) {
+              $metadata = Invoke-WebRequest -Uri $metadataUrl -Credential $creds -UseBasicParsing
+              $latest = [regex]::Match($metadata.Content, "<latest>(\d{14})</latest>").Groups[1].Value
+              if (-not $latest) { Write-Error "Could not extract latest version from $metadataUrl"; exit 1 }
+              return $latest
+          }
+
+          $frontendVersion = Get-LatestVersion "$baseUrl/frontend-build/maven-metadata.xml"
+          $serverVersion   = Get-LatestVersion "$baseUrl/server-build/maven-metadata.xml"
+
+          Write-Host "[INFO] Latest Frontend Version: $frontendVersion"
+          Write-Host "[INFO] Latest Server Version: $serverVersion"
+
+          Set-Content -Path $env:GITHUB_ENV -Value "FRONTEND_VERSION=$frontendVersion"
+          Add-Content -Path $env:GITHUB_ENV -Value "SERVER_VERSION=$serverVersion"
+
+      - name: Download and extract latest artifacts
+        shell: pwsh
         run: |
-          $baseUrl = 'http://127.0.0.1:8081/repository/JuiceShopMavenDemo/com/example/juiceshop'
+          $baseUrl = "http://10.158.124.198:9000/repository/JuiceShopMavenDemo/com/example/juiceshop"
+
           $frontendUrl = "$baseUrl/frontend-build/${env:FRONTEND_VERSION}/frontend-build-${env:FRONTEND_VERSION}.zip"
           $serverUrl   = "$baseUrl/server-build/${env:SERVER_VERSION}/server-build-${env:SERVER_VERSION}.zip"
 
@@ -34,16 +54,17 @@ jobs:
           New-Item -ItemType Directory -Force -Path "C:\deploy\frontend" | Out-Null
           New-Item -ItemType Directory -Force -Path "C:\deploy\server" | Out-Null
 
-          Invoke-WebRequest $frontendUrl -OutFile "frontend.zip"
-          Invoke-WebRequest $serverUrl -OutFile "server.zip"
+          Invoke-WebRequest -Uri $frontendUrl -OutFile "frontend.zip" -Credential $creds
+          Invoke-WebRequest -Uri $serverUrl -OutFile "server.zip" -Credential $creds
 
           Write-Host "[INFO] Extracting frontend..."
-          Expand-Archive frontend.zip -DestinationPath "C:\deploy\frontend" -Force
+          Expand-Archive -Path "frontend.zip" -DestinationPath "C:\deploy\frontend" -Force
 
           Write-Host "[INFO] Extracting server..."
-          Expand-Archive server.zip -DestinationPath "C:\deploy\server" -Force
+          Expand-Archive -Path "server.zip" -DestinationPath "C:\deploy\server" -Force
 
       - name: Verify deployment
+        shell: pwsh
         run: |
           if (Test-Path "C:\deploy\frontend\frontend\index.html" -and Test-Path "C:\deploy\server\package.json") {
               Write-Host "[SUCCESS] Deployment verified successfully."
