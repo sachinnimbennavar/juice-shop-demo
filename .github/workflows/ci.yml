@@ -36,14 +36,14 @@ jobs:
           $frontendVersion = Get-LatestVersion "$baseUrl/frontend-build/maven-metadata.xml" "frontend-build"
           $serverVersion   = Get-LatestVersion "$baseUrl/server-build/maven-metadata.xml" "server-build"
 
-          # Set GitHub Actions environment variables
           Add-Content -Path $env:GITHUB_ENV -Value "FRONTEND_VERSION=$frontendVersion"
           Add-Content -Path $env:GITHUB_ENV -Value "SERVER_VERSION=$serverVersion"
 
-          # Log deployed versions locally
+          # Log deployed versions safely
           $historyFile = "C:\deploy\deployment_history.txt"
-          New-Item -ItemType File -Force -Path $historyFile | Out-Null
-          Add-Content -Path $historyFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - FRONTEND: $frontendVersion, SERVER: $serverVersion"
+          if (-not (Test-Path $historyFile)) { New-Item -ItemType File -Force -Path $historyFile | Out-Null }
+          $logLine = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + ' - FRONTEND: ' + $frontendVersion + ', SERVER: ' + $serverVersion
+          Add-Content -Path $historyFile -Value $logLine
 
       - name: Download and extract latest artifacts
         shell: powershell
