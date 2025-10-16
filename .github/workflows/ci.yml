@@ -9,7 +9,7 @@ jobs:
 
     env:
       NEXUS_URL: http://127.0.0.1:8081
-      DEPLOY_PATH_FRONTEND: C:\inetpub\wwwroot\juice-shop
+      DEPLOY_PATH_FRONTEND: C:\JuiceShopServer\frontend   # Updated path
       DEPLOY_PATH_SERVER: C:\JuiceShopServer
 
     steps:
@@ -37,12 +37,6 @@ jobs:
           Invoke-WebRequest -Uri $frontendUrl -OutFile "frontend.zip" -Headers $headers
           Expand-Archive -Path "frontend.zip" -DestinationPath "$env:DEPLOY_PATH_FRONTEND" -Force
           Write-Host "[SUCCESS] Frontend deployed."
-
-          # Copy frontend into backend folder so npm install works
-          $backendFrontendPath = Join-Path $env:DEPLOY_PATH_SERVER "frontend"
-          Write-Host "[INFO] Copying frontend into backend folder: $backendFrontendPath"
-          Copy-Item -Path "$env:DEPLOY_PATH_FRONTEND\*" -Destination $backendFrontendPath -Recurse -Force
-          Write-Host "[SUCCESS] Frontend copied to backend folder."
 
           # --- SERVER ---
           $serverApi = "$env:NEXUS_URL/service/rest/v1/search?repository=JuiceShopMavenDemo&group=com.example.juiceshop&name=server-build"
