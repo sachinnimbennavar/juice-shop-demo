@@ -23,7 +23,6 @@ jobs:
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
           Write-Host "[INFO] Starting deployment..."
-
           # Prepare Basic Auth
           $pair = "${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes($pair))
@@ -34,18 +33,22 @@ jobs:
           $frontendResp = Invoke-RestMethod -Uri $frontendApi -Headers $headers
           $latestFrontend = ($frontendResp.items.version | Sort-Object -Descending | Select-Object -First 1)
           Write-Host "[INFO] Latest frontend build: $latestFrontend"
-
           $frontendUrl = "$env:NEXUS_URL/repository/JuiceShopMavenDemo/com/example/juiceshop/frontend-build/$latestFrontend/frontend-build-$latestFrontend.zip"
           Invoke-WebRequest -Uri $frontendUrl -OutFile "frontend.zip" -Headers $headers
           Expand-Archive -Path "frontend.zip" -DestinationPath "$env:DEPLOY_PATH_FRONTEND" -Force
           Write-Host "[SUCCESS] Frontend deployed."
+
+          # Copy frontend into backend folder so npm install works
+          $backendFrontendPath = Join-Path $env:DEPLOY_PATH_SERVER "frontend"
+          Write-Host "[INFO] Copying frontend into backend folder: $backendFrontendPath"
+          Copy-Item -Path "$env:DEPLOY_PATH_FRONTEND\*" -Destination $backendFrontendPath -Recurse -Force
+          Write-Host "[SUCCESS] Frontend copied to backend folder."
 
           # --- SERVER ---
           $serverApi = "$env:NEXUS_URL/service/rest/v1/search?repository=JuiceShopMavenDemo&group=com.example.juiceshop&name=server-build"
           $serverResp = Invoke-RestMethod -Uri $serverApi -Headers $headers
           $latestServer = ($serverResp.items.version | Sort-Object -Descending | Select-Object -First 1)
           Write-Host "[INFO] Latest server build: $latestServer"
-
           $serverUrl = "$env:NEXUS_URL/repository/JuiceShopMavenDemo/com/example/juiceshop/server-build/$latestServer/server-build-$latestServer.zip"
           Invoke-WebRequest -Uri $serverUrl -OutFile "server.zip" -Headers $headers
           Expand-Archive -Path "server.zip" -DestinationPath "$env:DEPLOY_PATH_SERVER" -Force
