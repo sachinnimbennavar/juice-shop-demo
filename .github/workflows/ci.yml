@@ -9,7 +9,7 @@ jobs:
 
     env:
       NEXUS_URL: http://127.0.0.1:8081
-      DEPLOY_PATH_FRONTEND: C:\JuiceShopServer\frontend   # Updated path
+      DEPLOY_PATH_FRONTEND: C:\JuiceShopServer\frontend
       DEPLOY_PATH_SERVER: C:\JuiceShopServer
 
     steps:
@@ -27,7 +27,6 @@ jobs:
           $pair = "${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes($pair))
           $headers = @{ Authorization = "Basic $base64Auth" }
-
           # --- FRONTEND ---
           $frontendApi = "$env:NEXUS_URL/service/rest/v1/search?repository=JuiceShopMavenDemo&group=com.example.juiceshop&name=frontend-build"
           $frontendResp = Invoke-RestMethod -Uri $frontendApi -Headers $headers
@@ -37,7 +36,6 @@ jobs:
           Invoke-WebRequest -Uri $frontendUrl -OutFile "frontend.zip" -Headers $headers
           Expand-Archive -Path "frontend.zip" -DestinationPath "$env:DEPLOY_PATH_FRONTEND" -Force
           Write-Host "[SUCCESS] Frontend deployed."
-
           # --- SERVER ---
           $serverApi = "$env:NEXUS_URL/service/rest/v1/search?repository=JuiceShopMavenDemo&group=com.example.juiceshop&name=server-build"
           $serverResp = Invoke-RestMethod -Uri $serverApi -Headers $headers
@@ -47,5 +45,29 @@ jobs:
           Invoke-WebRequest -Uri $serverUrl -OutFile "server.zip" -Headers $headers
           Expand-Archive -Path "server.zip" -DestinationPath "$env:DEPLOY_PATH_SERVER" -Force
           Write-Host "[SUCCESS] Server deployed."
-
           Write-Host "✅ Deployment of latest build completed successfully!"
+
+      # --- NEW: Install backend dependencies and start server ---
+      - name: ⚡ Start backend server
+        shell: powershell
+        run: |
+          cd $env:DEPLOY_PATH_SERVER
+          Write-Host "[INFO] Installing backend dependencies..."
+          npm install --legacy-peer-deps
+          Write-Host "[INFO] Starting backend server..."
+          Start-Process -FilePath "npm" -ArgumentList "run start" -NoNewWindow
+          Write-Host "[SUCCESS] Backend server started."
+
+      # --- NEW: Deploy frontend to IIS ---
+      - name: 🖥 Deploy frontend to IIS
+        shell: powershell
+        run: |
+          Import-Module WebAdministration
+          $siteName = "JuiceShopFrontend"
+          $frontendPath = "$env:DEPLOY_PATH_FRONTEND"
+          Write-Host "[INFO] Deploying frontend to IIS..."
+          if (Test-Path "IIS:\Sites\$siteName") {
+              Remove-WebApplication -Name $siteName
+          }
+          New-WebApplication -Name $siteName -Site "Default Web Site" -PhysicalPath $frontendPath -ApplicationPool "DefaultAppPool"
+          Write-Host "[SUCCESS] Frontend deployed to IIS."
