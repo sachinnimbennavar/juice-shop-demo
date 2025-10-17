@@ -15,29 +15,25 @@ jobs:
       - name: 🧩 Checkout code
         uses: actions/checkout@v3
 
-      # --- Skipping Nexus deployment for testing ---
+      # --- Optimized backend/frontend install & start ---
       - name: ⚡ Install & Start Backend
         shell: powershell
         run: |
           cd $env:DEPLOY_PATH_SERVER
-          Write-Host "[INFO] Installing backend dependencies (without postinstall)..."
-          npm install --legacy-peer-deps --ignore-scripts
-
-          Write-Host "[INFO] Installing frontend dependencies (without postinstall)..."
-          cd frontend
+          Write-Host "[INFO] Installing dependencies (without postinstall)..."
           npm install --legacy-peer-deps --ignore-scripts
 
           Write-Host "[INFO] Building frontend..."
           npm run build:frontend
 
-          cd ..
           Write-Host "[INFO] Building backend..."
           npm run build:server
 
           Write-Host "[INFO] Starting backend server..."
-          Start-Process -FilePath "npm" -ArgumentList "run start" -NoNewWindow
+          Start-Process -FilePath "npm.cmd" -ArgumentList "run start" -NoNewWindow
           Write-Host "[SUCCESS] Backend server started."
 
+      # --- Deploy frontend to IIS ---
       - name: 🖥 Deploy frontend to IIS
         shell: powershell
         run: |
