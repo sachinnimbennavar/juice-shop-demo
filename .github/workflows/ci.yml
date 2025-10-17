@@ -47,18 +47,28 @@ jobs:
           Write-Host "[SUCCESS] Server deployed."
           Write-Host "✅ Deployment of latest build completed successfully!"
 
-      # --- NEW: Install backend dependencies and start server ---
-      - name: ⚡ Start backend server
+      # --- Optimized backend install and start ---
+      - name: ⚡ Install & Start Backend
         shell: powershell
         run: |
           cd $env:DEPLOY_PATH_SERVER
-          Write-Host "[INFO] Installing backend dependencies..."
+          Write-Host "[INFO] Installing backend dependencies (without postinstall)..."
+          npm install --legacy-peer-deps --ignore-scripts
+
+          Write-Host "[INFO] Building frontend..."
+          cd frontend
           npm install --legacy-peer-deps
+          npm run build:frontend
+          cd ..
+
+          Write-Host "[INFO] Building backend..."
+          npm run build:server
+
           Write-Host "[INFO] Starting backend server..."
           Start-Process -FilePath "npm" -ArgumentList "run start" -NoNewWindow
           Write-Host "[SUCCESS] Backend server started."
 
-      # --- NEW: Deploy frontend to IIS ---
+      # --- Deploy frontend to IIS ---
       - name: 🖥 Deploy frontend to IIS
         shell: powershell
         run: |
