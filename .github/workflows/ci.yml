@@ -1,4 +1,4 @@
-name: Juice Shop Deployment
+name: Juice Shop Deployment (Test)
 
 on:
   workflow_dispatch:
@@ -8,7 +8,6 @@ jobs:
     runs-on: self-hosted
 
     env:
-      NEXUS_URL: http://127.0.0.1:8081
       DEPLOY_PATH_FRONTEND: C:\JuiceShopServer\frontend
       DEPLOY_PATH_SERVER: C:\JuiceShopServer
 
@@ -16,38 +15,7 @@ jobs:
       - name: 🧩 Checkout code
         uses: actions/checkout@v3
 
-      - name: 🚀 Deploy latest build from Nexus
-        shell: powershell
-        env:
-          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
-          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
-        run: |
-          Write-Host "[INFO] Starting deployment..."
-          # Prepare Basic Auth
-          $pair = "${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"
-          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes($pair))
-          $headers = @{ Authorization = "Basic $base64Auth" }
-          # --- FRONTEND ---
-          $frontendApi = "$env:NEXUS_URL/service/rest/v1/search?repository=JuiceShopMavenDemo&group=com.example.juiceshop&name=frontend-build"
-          $frontendResp = Invoke-RestMethod -Uri $frontendApi -Headers $headers
-          $latestFrontend = ($frontendResp.items.version | Sort-Object -Descending | Select-Object -First 1)
-          Write-Host "[INFO] Latest frontend build: $latestFrontend"
-          $frontendUrl = "$env:NEXUS_URL/repository/JuiceShopMavenDemo/com/example/juiceshop/frontend-build/$latestFrontend/frontend-build-$latestFrontend.zip"
-          Invoke-WebRequest -Uri $frontendUrl -OutFile "frontend.zip" -Headers $headers
-          Expand-Archive -Path "frontend.zip" -DestinationPath "$env:DEPLOY_PATH_FRONTEND" -Force
-          Write-Host "[SUCCESS] Frontend deployed."
-          # --- SERVER ---
-          $serverApi = "$env:NEXUS_URL/service/rest/v1/search?repository=JuiceShopMavenDemo&group=com.example.juiceshop&name=server-build"
-          $serverResp = Invoke-RestMethod -Uri $serverApi -Headers $headers
-          $latestServer = ($serverResp.items.version | Sort-Object -Descending | Select-Object -First 1)
-          Write-Host "[INFO] Latest server build: $latestServer"
-          $serverUrl = "$env:NEXUS_URL/repository/JuiceShopMavenDemo/com/example/juiceshop/server-build/$latestServer/server-build-$latestServer.zip"
-          Invoke-WebRequest -Uri $serverUrl -OutFile "server.zip" -Headers $headers
-          Expand-Archive -Path "server.zip" -DestinationPath "$env:DEPLOY_PATH_SERVER" -Force
-          Write-Host "[SUCCESS] Server deployed."
-          Write-Host "✅ Deployment of latest build completed successfully!"
-
-      # --- Optimized backend install and start ---
+      # --- Skipping Nexus deployment for testing ---
       - name: ⚡ Install & Start Backend
         shell: powershell
         run: |
@@ -55,12 +23,14 @@ jobs:
           Write-Host "[INFO] Installing backend dependencies (without postinstall)..."
           npm install --legacy-peer-deps --ignore-scripts
 
-          Write-Host "[INFO] Building frontend..."
+          Write-Host "[INFO] Installing frontend dependencies (without postinstall)..."
           cd frontend
-          npm install --legacy-peer-deps
-          npm run build:frontend
-          cd ..
+          npm install --legacy-peer-deps --ignore-scripts
 
+          Write-Host "[INFO] Building frontend..."
+          npm run build:frontend
+
+          cd ..
           Write-Host "[INFO] Building backend..."
           npm run build:server
 
@@ -68,7 +38,6 @@ jobs:
           Start-Process -FilePath "npm" -ArgumentList "run start" -NoNewWindow
           Write-Host "[SUCCESS] Backend server started."
 
-      # --- Deploy frontend to IIS ---
       - name: 🖥 Deploy frontend to IIS
         shell: powershell
         run: |
