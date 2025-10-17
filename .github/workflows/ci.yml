@@ -1,4 +1,4 @@
-name: Juice Shop Deployment (Full Build)
+name: Juice Shop Deployment (Full Build, No Postinstall Loop)
 
 on:
   workflow_dispatch:
@@ -15,20 +15,20 @@ jobs:
       - name: 🧩 Checkout code
         uses: actions/checkout@v3
 
-      - name: ⚡ Install & Build Frontend & Backend
+      - name: ⚡ Install dependencies and build frontend & backend
         shell: powershell
         run: |
           cd $env:DEPLOY_PATH_SERVER
 
+          Write-Host "[INFO] Installing backend dependencies (skipping postinstall)..."
+          npm install --legacy-peer-deps --ignore-scripts
+
           Write-Host "[INFO] Installing frontend dependencies..."
           cd frontend
-          npm install --legacy-peer-deps --prefer-offline --no-audit
+          npm install --legacy-peer-deps
           Write-Host "[INFO] Building frontend..."
           npm run build -- --configuration production --watch=false --verbose
           cd ..
-
-          Write-Host "[INFO] Installing backend dependencies..."
-          npm install --prefer-offline --no-audit
 
           Write-Host "[INFO] Building backend..."
           npm run build:server
