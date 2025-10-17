@@ -1,4 +1,4 @@
-name: Juice Shop Deployment (Test)
+name: Juice Shop Demo POC
 
 on:
   workflow_dispatch:
@@ -8,23 +8,20 @@ jobs:
     runs-on: self-hosted
 
     env:
-      DEPLOY_PATH_FRONTEND: C:\JuiceShopServer\frontend
       DEPLOY_PATH_SERVER: C:\JuiceShopServer
 
     steps:
       - name: 🧩 Checkout code
         uses: actions/checkout@v3
 
-      # --- Optimized backend/frontend install & start ---
-      - name: ⚡ Install & Start Backend
+      - name: ⚡ Install & Start Backend (Demo POC)
         shell: powershell
         run: |
           cd $env:DEPLOY_PATH_SERVER
           Write-Host "[INFO] Installing dependencies (without postinstall)..."
           npm install --legacy-peer-deps --ignore-scripts
 
-          Write-Host "[INFO] Building frontend..."
-          npm run build:frontend
+          Write-Host "[INFO] Skipping frontend build for demo POC."
 
           Write-Host "[INFO] Building backend..."
           npm run build:server
@@ -33,16 +30,8 @@ jobs:
           Start-Process -FilePath "npm.cmd" -ArgumentList "run start" -NoNewWindow
           Write-Host "[SUCCESS] Backend server started."
 
-      # --- Deploy frontend to IIS ---
-      - name: 🖥 Deploy frontend to IIS
+      - name: ✅ POC Complete
         shell: powershell
         run: |
-          Import-Module WebAdministration
-          $siteName = "JuiceShopFrontend"
-          $frontendPath = "$env:DEPLOY_PATH_FRONTEND"
-          Write-Host "[INFO] Deploying frontend to IIS..."
-          if (Test-Path "IIS:\Sites\$siteName") {
-              Remove-WebApplication -Name $siteName
-          }
-          New-WebApplication -Name $siteName -Site "Default Web Site" -PhysicalPath $frontendPath -ApplicationPool "DefaultAppPool"
-          Write-Host "[SUCCESS] Frontend deployed to IIS."
+          Write-Host "[INFO] Demo POC deployment completed."
+          Write-Host "[INFO] You can access the Juice Shop backend on http://localhost:3000 (or configured port)."
