@@ -1,53 +1,60 @@
-name: JuiceShop-CD-Pipeline
+name: JuiceShop-Manual-Deployment
 
 on:
-  push:
-    branches:
-      - main
+  workflow_dispatch:  # This allows you to run manually from GitHub Actions
 
 jobs:
   deploy:
     runs-on: windows-latest
     env:
       DEPLOY_PATH_SERVER: C:\JuiceShopServer
-      NODE_PATH: C:\Program Files\nodejs
 
     steps:
-      - name: Checkout code
+      - name: Checkout code (optional)
         uses: actions/checkout@v3
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: '20'
+      - name: Stop Running Server
+        run: |
+          # Stop PM2 process if running
+          if (pm2 list | findstr JuiceShop) {
+            pm2 stop JuiceShop
+          }
 
-      - name: Install Frontend Dependencies
+      - name: Extract Frontend & Backend
+        run: |
+          # Remove old folders
+          Remove-Item -Recurse -Force $env:DEPLOY_PATH_SERVER\frontend
+          Remove-Item -Recurse -Force $env:DEPLOY_PATH_SERVER\backend
+
+          # Extract new zips
+          Expand-Archive -Path "$env:DEPLOY_PATH_SERVER\frontend.zip" -DestinationPath "$env:DEPLOY_PATH_SERVER\frontend"
+          Expand-Archive -Path "$env:DEPLOY_PATH_SERVER\backend.zip" -DestinationPath "$env:DEPLOY_PATH_SERVER\backend"
+
+      - name: Install Frontend Dependencies & Build
         run: |
           cd $env:DEPLOY_PATH_SERVER\frontend
-          npm ci
+          npm install
           npm run build
 
       - name: Install Backend Dependencies
         run: |
           cd $env:DEPLOY_PATH_SERVER\backend
-          npm ci
-          npm run build
+          npm install
 
-      - name: Start/Restart JuiceShop Server
+      - name: Copy Frontend Build to Backend
+        run: |
+          # Remove old public folder
+          Remove-Item -Recurse -Force "$env:DEPLOY_PATH_SERVER\backend\public"
+          # Copy new frontend build
+          Copy-Item -Recurse "$env:DEPLOY_PATH_SERVER\frontend\dist\frontend\*" "$env:DEPLOY_PATH_SERVER\backend\public\"
+
+      - name: Start Backend Server
         run: |
           cd $env:DEPLOY_PATH_SERVER\backend
-          # Use PM2 to manage the server process
           npm install -g pm2
-          if pm2 list | findstr JuiceShop; then
+          if (pm2 list | findstr JuiceShop) {
             pm2 restart JuiceShop
-          else
+          } else {
             pm2 start server.js --name JuiceShop
             pm2 save
-          fi
-
-      - name: Optional: Audit Dependencies
-        run: |
-          cd $env:DEPLOY_PATH_SERVER\frontend
-          npm audit fix --force
-          cd $env:DEPLOY_PATH_SERVER\backend
-          npm audit fix --force
+          }
