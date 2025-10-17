@@ -1,44 +1,53 @@
-name: Juice Shop Deployment (Full Build, No Postinstall Loop)
+name: JuiceShop-CD-Pipeline
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - main
 
 jobs:
   deploy:
-    runs-on: self-hosted
-
+    runs-on: windows-latest
     env:
       DEPLOY_PATH_SERVER: C:\JuiceShopServer
-      DEPLOY_PATH_FRONTEND: C:\JuiceShopServer\frontend
+      NODE_PATH: C:\Program Files\nodejs
 
     steps:
-      - name: 🧩 Checkout code
+      - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: ⚡ Install dependencies and build frontend & backend
-        shell: powershell
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+
+      - name: Install Frontend Dependencies
         run: |
-          cd $env:DEPLOY_PATH_SERVER
+          cd $env:DEPLOY_PATH_SERVER\frontend
+          npm ci
+          npm run build
 
-          Write-Host "[INFO] Installing backend dependencies (skipping postinstall)..."
-          npm install --legacy-peer-deps --ignore-scripts
-
-          Write-Host "[INFO] Installing frontend dependencies..."
-          cd frontend
-          npm install --legacy-peer-deps
-          Write-Host "[INFO] Building frontend..."
-          npm run build -- --configuration production --watch=false --verbose
-          cd ..
-
-          Write-Host "[INFO] Building backend..."
-          npm run build:server
-
-          Write-Host "[INFO] Starting backend server..."
-          Start-Process -FilePath "npm.cmd" -ArgumentList "run start" -NoNewWindow
-          Write-Host "[SUCCESS] Backend server started."
-
-      - name: ✅ Deployment Complete
-        shell: powershell
+      - name: Install Backend Dependencies
         run: |
-          Write-Host "[INFO] Full deployment completed successfully."
-          Write-Host "[INFO] Access Juice Shop at http://localhost:3000"
+          cd $env:DEPLOY_PATH_SERVER\backend
+          npm ci
+          npm run build
+
+      - name: Start/Restart JuiceShop Server
+        run: |
+          cd $env:DEPLOY_PATH_SERVER\backend
+          # Use PM2 to manage the server process
+          npm install -g pm2
+          if pm2 list | findstr JuiceShop; then
+            pm2 restart JuiceShop
+          else
+            pm2 start server.js --name JuiceShop
+            pm2 save
+          fi
+
+      - name: Optional: Audit Dependencies
+        run: |
+          cd $env:DEPLOY_PATH_SERVER\frontend
+          npm audit fix --force
+          cd $env:DEPLOY_PATH_SERVER\backend
+          npm audit fix --force
