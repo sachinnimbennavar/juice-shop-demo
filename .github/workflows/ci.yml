@@ -1,28 +1,68 @@
-name: Verify Nexus Upload and Extraction
+name: Compare Repo vs Extracted Files (GitHub Summary)
 
 on:
   workflow_dispatch:
 
 jobs:
-  verify:
-    runs-on: windows-latest
+  compare:
+    name: Compare Files on Windows VM
+    runs-on: [self-hosted, windows]
 
     steps:
-      # 1️⃣ Checkout your juice-shop-demo repo
-      - name: Checkout juice-shop-demo repo
+      # 1️⃣ Checkout repository
+      - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          repository: sachinnimbennavar/juice-shop-demo
 
-      # 2️⃣ List all files (recursively)
-      - name: List repository files
+      # 2️⃣ Generate list of source files from the repo
+      - name: Generate repo file list
         run: |
-          Get-ChildItem -Recurse | Select-Object FullName
+          Get-ChildItem -Recurse -Exclude node_modules,build,.git,dist `
+          | Where-Object { -not $_.PSIsContainer } `
+          | Select-Object -ExpandProperty FullName `
+          | Out-File repo_file_list.txt
 
-      # 3️⃣ Optional: Show folder structure only (cleaner)
-      # - name: List repository directories
-      #   run: |
-      #     Get-ChildItem -Recurse -Directory | Select-Object FullName
+      # 3️⃣ Generate list of extracted files from VM
+      - name: Generate VM extracted file list
+        run: |
+          Get-ChildItem -Path "C:\JuiceShopServer" -Recurse -Exclude node_modules,build,.git,dist `
+          | Where-Object { -not $_.PSIsContainer } `
+          | Select-Object -ExpandProperty FullName `
+          | Out-File vm_file_list.txt
 
-      # 4️⃣ (Later) Compare extracted VM files vs source
-      # We'll use checksum or zip contents for verification in future steps
+      # 4️⃣ Compare files and generate GitHub summary
+      - name: Compare and generate summary
+        run: |
+          $repoFiles = Get-Content repo_file_list.txt
+          $vmFiles = Get-Content vm_file_list.txt
+
+          $comparison = Compare-Object -ReferenceObject $repoFiles -DifferenceObject $vmFiles -IncludeEqual -PassThru | 
+                        ForEach-Object {
+                          if ($_.SideIndicator -eq "==") { [PSCustomObject]@{ File=$_ ; Status="Matched" ; Color="green" } }
+                          elseif ($_.SideIndicator -eq "<=") { [PSCustomObject]@{ File=$_ ; Status="Missing in VM" ; Color="red" } }
+                          elseif ($_.SideIndicator -eq "=>") { [PSCustomObject]@{ File=$_ ; Status="Extra in VM" ; Color="orange" } }
+                        }
+
+          $summaryContent = "<h2>File Comparison Summary</h2><table><tr><th>File</th><th>Status</th></tr>"
+          foreach ($item in $comparison) {
+            $summaryContent += "<tr><td>$($item.File)</td><td style='color:$($item.Color)'>$($item.Status)</td></tr>"
+          }
+          $summaryContent += "</table>"
+
+          # Save summary to GitHub Actions summary
+          $summaryContent | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8
+
+          # Fail workflow if any missing files
+          if ($comparison | Where-Object { $_.Status -eq "Missing in VM" }) {
+              Write-Host "❌ Some files are missing in VM!"
+              exit 1
+          }
+
+      # 5️⃣ Upload file lists as artifact
+      - name: Upload file lists
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: file-lists
+          path: |
+            repo_file_list.txt
+            vm_file_list.txt
