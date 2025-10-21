@@ -1,43 +1,66 @@
-name: Manual Deployment
+name: Manual Juice Shop Deployment
 
 on:
-  workflow_dispatch:   # lets you run it manually from Actions tab
+  workflow_dispatch:
 
 jobs:
   deploy:
-    name: Deploy to Server
-    runs-on: windows-latest
+    runs-on: self-hosted
+
+    env:
+      NEXUS_URL: http://10.158.124.198:8081
+      DEPLOY_PATH: C:\JuiceShopServer
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: 🧩 Checkout code
+        uses: actions/checkout@v3
 
-      - name: Deploy to server
+      - name: 🚀 Deploy latest frontend and server from Nexus
         shell: pwsh
+        env:
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
           Write-Host "[INFO] Starting deployment..."
 
-          # === Variables ===
-          $frontendApi = "http://<YOUR_SERVER_IP_OR_DOMAIN>/api/deploy/frontend"
-          $backendApi  = "http://<YOUR_SERVER_IP_OR_DOMAIN>/api/deploy/backend"
-          $headers     = @{ Authorization = "Bearer <YOUR_API_TOKEN>" }
+          # Prepare Basic Auth
+          $pair = "${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"
+          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes($pair))
+          $headers = @{ Authorization = "Basic $base64Auth" }
 
-          try {
-              # === Frontend Deployment ===
-              Write-Host "[INFO] Triggering frontend deployment..."
-              $frontendResp = Invoke-RestMethod -Uri $frontendApi -Headers $headers -Method POST -ErrorAction Stop
-              Write-Host "[INFO] Frontend deployment response:"
-              Write-Host ($frontendResp | ConvertTo-Json -Depth 5)
+          # ===== FRONTEND =====
+          Write-Host "[INFO] Fetching latest frontend build from Nexus..."
+          $frontendApi = "$env:NEXUS_URL/service/rest/v1/search?repository=JuiceShopMavenDemo&group=com.example.juiceshop&name=frontend-build"
+          $frontendResp = Invoke-RestMethod -Uri $frontendApi -Headers $headers
+          if (-not $frontendResp.items) { throw "No frontend builds found in Nexus!" }
+          $latestFrontend = ($frontendResp.items.version | Sort-Object -Descending | Select-Object -First 1)
+          Write-Host "[INFO] Latest frontend version: $latestFrontend"
+          $frontendUrl = "$env:NEXUS_URL/repository/JuiceShopMavenDemo/com/example/juiceshop/frontend-build/$latestFrontend/frontend-build-$latestFrontend.zip"
+          Invoke-WebRequest -Uri $frontendUrl -OutFile "frontend.zip" -Headers $headers
+          Expand-Archive -Path "frontend.zip" -DestinationPath "$env:DEPLOY_PATH\frontend" -Force
+          Write-Host "[SUCCESS] Frontend extracted to $env:DEPLOY_PATH\frontend"
 
-              # === Backend Deployment ===
-              Write-Host "[INFO] Triggering backend deployment..."
-              $backendResp = Invoke-RestMethod -Uri $backendApi -Headers $headers -Method POST -ErrorAction Stop
-              Write-Host "[INFO] Backend deployment response:"
-              Write-Host ($backendResp | ConvertTo-Json -Depth 5)
+          # ===== SERVER =====
+          Write-Host "[INFO] Fetching latest server build from Nexus..."
+          $serverApi = "$env:NEXUS_URL/service/rest/v1/search?repository=JuiceShopMavenDemo&group=com.example.juiceshop&name=server-build"
+          $serverResp = Invoke-RestMethod -Uri $serverApi -Headers $headers
+          if (-not $serverResp.items) { throw "No server builds found in Nexus!" }
+          $latestServer = ($serverResp.items.version | Sort-Object -Descending | Select-Object -First 1)
+          Write-Host "[INFO] Latest server version: $latestServer"
+          $serverUrl = "$env:NEXUS_URL/repository/JuiceShopMavenDemo/com/example/juiceshop/server-build/$latestServer/server-build-$latestServer.zip"
+          Invoke-WebRequest -Uri $serverUrl -OutFile "server.zip" -Headers $headers
+          Expand-Archive -Path "server.zip" -DestinationPath "$env:DEPLOY_PATH\server" -Force
+          Write-Host "[SUCCESS] Server extracted to $env:DEPLOY_PATH\server"
 
-              Write-Host "[INFO] Deployment completed successfully."
+          # ===== VERIFICATION =====
+          Write-Host "[VERIFY] Checking extracted files..."
+          $frontendCount = (Get-ChildItem "$env:DEPLOY_PATH\frontend" -Recurse | Measure-Object).Count
+          $serverCount = (Get-ChildItem "$env:DEPLOY_PATH\server" -Recurse | Measure-Object).Count
+          Write-Host "[INFO] Frontend files extracted: $frontendCount"
+          Write-Host "[INFO] Server files extracted: $serverCount"
+
+          if ($frontendCount -lt 10 -or $serverCount -lt 10) {
+              throw "[ERROR] Extraction seems incomplete. Check Nexus packages."
           }
-          catch {
-              Write-Host "[ERROR] Deployment failed: $($_.Exception.Message)"
-              exit 1
-          }
+
+          Write-Host "✅ Deployment completed successfully!"
