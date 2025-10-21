@@ -1,152 +1,22 @@
-name: Juice Shop CI/CD - Build, Upload & Deploy
+- name: Deploy to server
+  run: |
+    Write-Host "[INFO] Starting deployment..."
 
-on:
-  push:
-    branches:
-      - main
-  workflow_dispatch:
+    # === Variables ===
+    $frontendApi = "http://<YOUR_SERVER_IP_OR_DOMAIN>/api/deploy/frontend"
+    $backendApi  = "http://<YOUR_SERVER_IP_OR_DOMAIN>/api/deploy/backend"
+    $headers     = @{ Authorization = "Bearer <YOUR_API_TOKEN>" }
 
-jobs:
-  build-upload-deploy:
-    runs-on: self-hosted
+    # === Frontend Deployment ===
+    Write-Host "[INFO] Triggering frontend deployment..."
+    $frontendResp = Invoke-RestMethod -Uri $frontendApi -Headers $headers -Method POST -ErrorAction Stop
+    Write-Host "[INFO] Frontend deployment response:"
+    Write-Host ($frontendResp | ConvertTo-Json -Depth 5)
 
-    env:
-      NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
-      DEPLOY_PATH: C:\JuiceShopServer
+    # === Backend Deployment ===
+    Write-Host "[INFO] Triggering backend deployment..."
+    $backendResp = Invoke-RestMethod -Uri $backendApi -Headers $headers -Method POST -ErrorAction Stop
+    Write-Host "[INFO] Backend deployment response:"
+    Write-Host ($backendResp | ConvertTo-Json -Depth 5)
 
-    steps:
-      # 1️⃣ Checkout code
-      - name: Checkout repository
-        uses: actions/checkout@v3
-
-      # 2️⃣ Setup Node memory
-      - name: Configure Node memory
-        run: set NODE_OPTIONS=--max_old_space_size=4096
-
-      # 3️⃣ Cache frontend & backend dependencies
-      - name: Cache frontend dependencies
-        uses: actions/cache@v3
-        with:
-          path: |
-            frontend/node_modules
-            frontend/dist
-            frontend/.angular
-          key: ${{ runner.os }}-frontend-${{ hashFiles('frontend/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-frontend-
-
-      - name: Cache server dependencies
-        uses: actions/cache@v3
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-server-${{ hashFiles('package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-server-
-
-      # 4️⃣ Install dependencies
-      - name: Install frontend & backend dependencies
-        run: |
-          cd frontend
-          npm install --legacy-peer-deps --prefer-offline --no-audit
-          cd ..
-          npm install --prefer-offline --no-audit
-
-      # 5️⃣ Build frontend and server
-      - name: Build frontend and server
-        run: |
-          cd frontend
-          npm run build -- --configuration production --watch=false --verbose
-          cd ..
-          npm run build:server
-
-      # 6️⃣ Verify build output
-      - name: Verify build contents before zipping
-        shell: powershell
-        run: |
-          Write-Host "=== FRONTEND BUILD FILES ==="
-          if (Test-Path "frontend/dist") {
-            Get-ChildItem -Recurse frontend/dist | Select-Object FullName
-          } else {
-            Write-Error "Frontend build output missing!"
-          }
-          Write-Host "=== SERVER FILES ==="
-          if (Test-Path "package.json") {
-            Get-ChildItem -Recurse . | Where-Object { $_.FullName -match 'models|routes|build|server.ts' } | Select-Object FullName
-          } else {
-            Write-Error "Server files missing!"
-          }
-
-      # 7️⃣ Package and upload to Nexus
-      - name: Package & Upload to Nexus
-        shell: powershell
-        env:
-          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
-          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
-        run: |
-          Write-Host "🟢 Packaging and uploading build artifacts..."
-          $timestamp = (Get-Date -Format "yyyyMMddHHmmss")
-
-          $pair = "${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"
-          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes($pair))
-          $headers = @{ Authorization = "Basic $base64Auth" }
-
-          # FRONTEND ZIP
-          if (Test-Path "frontend/dist") {
-            Compress-Archive -Path "frontend/dist/*" -DestinationPath "frontend-build-$timestamp.zip" -Force
-            Write-Host "[VERIFY] Frontend ZIP content:"
-            Expand-Archive -Path "frontend-build-$timestamp.zip" -DestinationPath "temp_frontend_verify" -Force
-            Get-ChildItem -Recurse temp_frontend_verify | Select-Object FullName
-
-            $frontendUrl = "${env:NEXUS_URL}/com/example/juiceshop/frontend-build/$timestamp/frontend-build-$timestamp.zip"
-            Invoke-RestMethod -Uri $frontendUrl -Method Put -InFile "frontend-build-$timestamp.zip" -Headers $headers
-            Write-Host "[SUCCESS] Frontend uploaded successfully."
-          }
-
-          # SERVER ZIP
-          $serverPaths = @("app.ts","server.ts","package.json","tsconfig.json","models","routes","lib","data","views","rsn","config","build") | Where-Object { Test-Path $_ }
-          if ($serverPaths.Count -gt 0) {
-            Compress-Archive -Path $serverPaths -DestinationPath "server-build-$timestamp.zip" -Force
-            Write-Host "[VERIFY] Server ZIP content:"
-            Expand-Archive -Path "server-build-$timestamp.zip" -DestinationPath "temp_server_verify" -Force
-            Get-ChildItem -Recurse temp_server_verify | Select-Object FullName
-
-            $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/server-build/$timestamp/server-build-$timestamp.zip"
-            Invoke-RestMethod -Uri $serverUrl -Method Put -InFile "server-build-$timestamp.zip" -Headers $headers
-            Write-Host "[SUCCESS] Server uploaded successfully."
-          }
-
-      # 8️⃣ Deploy from Nexus to C:\JuiceShopServer
-      - name: Deploy latest build from Nexus
-        shell: powershell
-        env:
-          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
-          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
-        run: |
-          Write-Host "[INFO] Starting deployment..."
-          $pair = "${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"
-          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes($pair))
-          $headers = @{ Authorization = "Basic $base64Auth" }
-
-          # --- FRONTEND ---
-          $frontendApi = "$env:NEXUS_URL/service/rest/v1/search?repository=JuiceShopMavenDemo&group=com.example.juiceshop&name=frontend-build"
-          $frontendResp = Invoke-RestMethod -Uri $frontendApi -Headers $headers
-          $latestFrontend = ($frontendResp.items.version | Sort-Object -Descending | Select-Object -First 1)
-          $frontendUrl = "$env:NEXUS_URL/com/example/juiceshop/frontend-build/$latestFrontend/frontend-build-$latestFrontend.zip"
-          Invoke-WebRequest -Uri $frontendUrl -OutFile "frontend.zip" -Headers $headers
-          Expand-Archive -Path "frontend.zip" -DestinationPath "$env:DEPLOY_PATH\frontend" -Force
-
-          # --- SERVER ---
-          $serverApi = "$env:NEXUS_URL/service/rest/v1/search?repository=JuiceShopMavenDemo&group=com.example.juiceshop&name=server-build"
-          $serverResp = Invoke-RestMethod -Uri $serverApi -Headers $headers
-          $latestServer = ($serverResp.items.version | Sort-Object -Descending | Select-Object -First 1)
-          $serverUrl = "$env:NEXUS_URL/com/example/juiceshop/server-build/$latestServer/server-build-$latestServer.zip"
-          Invoke-WebRequest -Uri $serverUrl -OutFile "server.zip" -Headers $headers
-          Expand-Archive -Path "server.zip" -DestinationPath "$env:DEPLOY_PATH\server" -Force
-
-          Write-Host "[VERIFY] Checking extracted frontend and server files..."
-          Get-ChildItem -Recurse "$env:DEPLOY_PATH" | Select-Object FullName
-
-          if (!(Test-Path "$env:DEPLOY_PATH\frontend\index.html")) { Write-Error "Frontend not extracted properly!" }
-          if (!(Test-Path "$env:DEPLOY_PATH\server\package.json")) { Write-Error "Server not extracted properly!" }
-
-          Write-Host "✅ All files verified and deployed successfully to $env:DEPLOY_PATH"
+    Write-Host "[INFO] Deployment completed successfully."
