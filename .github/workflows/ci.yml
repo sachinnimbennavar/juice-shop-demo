@@ -1,151 +1,63 @@
-name: Juice Shop CI/CD Pipeline
+name: Nexus Upload Manual
 
 on:
-  push:
-    branches:
-      - main
-  workflow_dispatch:
+  workflow_dispatch:  # Allows manual trigger
 
 jobs:
-  build-and-upload:
-    name: Build & Upload Artifacts
+  upload:
     runs-on: self-hosted
 
     steps:
-      # 1️⃣ Checkout code
+      # 1️⃣ Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2️⃣ Setup Node memory
-      - name: Configure Node memory
-        run: set NODE_OPTIONS=--max_old_space_size=4096
-
-      # 3️⃣ Cache frontend dependencies
-      - name: Cache frontend dependencies
-        uses: actions/cache@v3
-        with:
-          path: |
-            frontend/node_modules
-            frontend/dist
-            frontend/.angular
-          key: ${{ runner.os }}-frontend-${{ hashFiles('frontend/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-frontend-
-
-      # 4️⃣ Cache server dependencies
-      - name: Cache server dependencies
-        uses: actions/cache@v3
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-server-${{ hashFiles('package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-server-
-
-      # 5️⃣ Install frontend dependencies
-      - name: Install frontend dependencies
-        run: |
-          cd frontend
-          npm install --legacy-peer-deps --prefer-offline --no-audit
-          cd ..
-
-      # 6️⃣ Build frontend
-      - name: Build frontend
-        run: |
-          cd frontend
-          npm run build -- --configuration production --watch=false --verbose
-          cd ..
-
-      # 7️⃣ Install server dependencies
-      - name: Install server dependencies
-        run: npm install --prefer-offline --no-audit
-
-      # 8️⃣ Build server
-      - name: Build server
-        run: npm run build:server
-
-      # 9️⃣ Upload ZIPs to Nexus repo
-      - name: Upload build ZIPs to Nexus Maven repo
+      # 2️⃣ Nexus Upload Step
+      - name: Upload build artifacts to Nexus
         shell: powershell
         env:
-          NEXUS_URL: http://10.158.124.198:8081/repository/JuiceShopMavenDemo
+          NEXUS_URL: ${{ secrets.NEXUS_URL }}
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
-          Write-Host "🟢 Packaging and uploading build artifacts..."
-          $timestamp = (Get-Date -Format "yyyyMMddHHmmss")
+          Write-Host "🧩 Preparing frontend and server zips..."
 
-          # ===== FRONTEND =====
-          if (Test-Path "frontend") {
-              Write-Host "[INFO] Packaging entire frontend folder..."
-              Compress-Archive -Path "frontend\*" -DestinationPath "frontend-build-$timestamp.zip" -Force
-              $frontendUrl = "${env:NEXUS_URL}/com/example/juiceshop/frontend-build/$timestamp/frontend-build-$timestamp.zip"
-              Invoke-RestMethod -Uri $frontendUrl -Method Put -InFile "frontend-build-$timestamp.zip" -Headers @{ Authorization = "Basic " + [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}")) }
-              Write-Host "[SUCCESS] Frontend uploaded successfully."
+          # Frontend zip
+          if (Test-Path "frontend/dist") {
+              Write-Host "Creating frontend-build.zip..."
+              Compress-Archive -Path "frontend/dist/*" -DestinationPath "frontend-build.zip" -Force
+          } else {
+              Write-Host "⚠️ frontend/dist not found, skipping frontend zip."
           }
 
-          # ===== SERVER =====
-          $serverPaths = @(
-              "app.ts","server.ts","package.json","tsconfig.json",
-              "models","routes","lib","data","views","rsn","config","build"
-          )
-          $existingPaths = $serverPaths | Where-Object { Test-Path $_ }
-          if ($existingPaths.Count -gt 0) {
-              Write-Host "[INFO] Packaging entire server folder..."
-              Compress-Archive -Path $existingPaths -DestinationPath "server-build-$timestamp.zip" -Force
-              $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/server-build/$timestamp/server-build-$timestamp.zip"
-              Invoke-RestMethod -Uri $serverUrl -Method Put -InFile "server-build-$timestamp.zip" -Headers @{ Authorization = "Basic " + [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}")) }
-              Write-Host "[SUCCESS] Server uploaded successfully."
+          # Server zip - include everything in backend folder
+          if (Test-Path ".") {
+              Write-Host "Creating server-build.zip..."
+              Compress-Archive -Path "./*" -DestinationPath "server-build.zip" -Force
+              Write-Host "✅ Server zip created successfully."
+          } else {
+              Write-Host "⚠️ Backend folder not found, skipping server zip."
           }
 
-          Write-Host "✅ All builds uploaded successfully!"
-
-  deploy:
-    name: Deploy to Server
-    runs-on: self-hosted
-    needs: build-and-upload
-
-    env:
-      NEXUS_URL: http://10.158.124.198:8081
-      DEPLOY_PATH: C:\JuiceShopServer
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Deploy latest frontend and server from Nexus
-        shell: pwsh
-        env:
-          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
-          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
-        run: |
-          Write-Host "[INFO] Starting deployment..."
-          $pair = "${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"
-          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes($pair))
+          # Upload to Nexus
+          Write-Host "⬆️ Uploading zips to Nexus..."
+          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
 
-          # ===== FRONTEND =====
-          $frontendUrl = "$env:NEXUS_URL/repository/JuiceShopMavenDemo/com/example/juiceshop/frontend-build/latest/frontend-build-latest.zip"
-          Invoke-WebRequest -Uri $frontendUrl -OutFile "frontend.zip" -Headers $headers
-          Remove-Item -Recurse -Force "$env:DEPLOY_PATH\frontend"
-          Expand-Archive -Path "frontend.zip" -DestinationPath "$env:DEPLOY_PATH\frontend" -Force
-          Write-Host "[SUCCESS] Frontend extracted to $env:DEPLOY_PATH\frontend"
+          if (Test-Path "frontend-build.zip") {
+              Write-Host "Uploading frontend-build.zip..."
+              Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/juice-shop/frontend-build-${env:GITHUB_RUN_NUMBER}.zip" `
+                                -Method Put `
+                                -InFile "frontend-build.zip" `
+                                -Headers $headers
+          }
 
-          # ===== SERVER =====
-          $serverUrl = "$env:NEXUS_URL/repository/JuiceShopMavenDemo/com/example/juiceshop/server-build/latest/server-build-latest.zip"
-          Invoke-WebRequest -Uri $serverUrl -OutFile "server.zip" -Headers $headers
-          Remove-Item -Recurse -Force "$env:DEPLOY_PATH\server"
-          Expand-Archive -Path "server.zip" -DestinationPath "$env:DEPLOY_PATH\server" -Force
-          Write-Host "[SUCCESS] Server extracted to $env:DEPLOY_PATH\server"
+          if (Test-Path "server-build.zip") {
+              Write-Host "Uploading server-build.zip..."
+              Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/juice-shop/server-build-${env:GITHUB_RUN_NUMBER}.zip" `
+                                -Method Put `
+                                -InFile "server-build.zip" `
+                                -Headers $headers
+          }
 
-          # ===== START SERVER AUTOMATICALLY =====
-          Write-Host "[INFO] Starting JuiceShop server..."
-          cd "$env:DEPLOY_PATH\server"
-          Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force
-          Start-Process "node" "server.ts" -NoNewWindow
-          Write-Host "[SUCCESS] JuiceShop server started!"
-
-          # ===== OPTIONAL: Deploy Frontend to IIS =====
-          # $iisPath = "C:\inetpub\wwwroot\JuiceShop"
-          # Remove-Item -Recurse -Force $iisPath
-          # Copy-Item "$env:DEPLOY_PATH\frontend\dist\*" -Destination $iisPath -Recurse -Force
-          # Write-Host "[SUCCESS] Frontend deployed to IIS at $iisPath"
+          Write-Host "✅ Nexus upload completed successfully."
