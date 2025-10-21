@@ -1,7 +1,7 @@
-name: Nexus Upload Manual
+name: Nexus Upload Full Repo with Frontend Build
 
 on:
-  workflow_dispatch:  # Allows manual trigger
+  workflow_dispatch:  # Manual trigger
 
 jobs:
   upload:
@@ -12,52 +12,84 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2️⃣ Nexus Upload Step
-      - name: Upload build artifacts to Nexus
+      # 2️⃣ Set Node memory (optional for large builds)
+      - name: Set Node memory
+        run: set NODE_OPTIONS=--max_old_space_size=4096
+
+      # 3️⃣ Install frontend dependencies
+      - name: Install frontend dependencies
+        run: |
+          cd frontend
+          npm install --legacy-peer-deps --prefer-offline --no-audit
+          cd ..
+
+      # 4️⃣ Build frontend if missing
+      - name: Build frontend if missing
+        run: |
+          if (!(Test-Path "frontend/dist") -or (Get-ChildItem "frontend/dist" | Measure-Object).Count -eq 0) {
+              Write-Host "🟢 frontend/dist not found. Building frontend..."
+              cd frontend
+              npm run build -- --configuration production --watch=false --verbose
+              cd ..
+          } else {
+              Write-Host "✅ frontend/dist already exists. Skipping build."
+          }
+        shell: powershell
+
+      # 5️⃣ Install server dependencies
+      - name: Install server dependencies
+        run: npm install --prefer-offline --no-audit
+
+      # 6️⃣ Build server
+      - name: Build server
+        run: npm run build:server
+
+      # 7️⃣ Package and Upload Full Repo
+      - name: Package and Upload Repo to Nexus
         shell: powershell
         env:
           NEXUS_URL: ${{ secrets.NEXUS_URL }}
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
-          Write-Host "🧩 Preparing frontend and server zips..."
+          Write-Host "🧩 Preparing full repository zip (excluding node_modules)..."
 
-          # Frontend zip
-          if (Test-Path "frontend/dist") {
-              Write-Host "Creating frontend-build.zip..."
-              Compress-Archive -Path "frontend/dist/*" -DestinationPath "frontend-build.zip" -Force
-          } else {
-              Write-Host "⚠️ frontend/dist not found, skipping frontend zip."
-          }
+          # Timestamp for folder and file
+          $timestamp = Get-Date -Format "yyyyMMddHHmmss"
+          $buildFolder = "frontend-build/$timestamp"
+          mkdir $buildFolder -Force
 
-          # Server zip - include everything in backend folder
-          if (Test-Path ".") {
-              Write-Host "Creating server-build.zip..."
-              Compress-Archive -Path "./*" -DestinationPath "server-build.zip" -Force
-              Write-Host "✅ Server zip created successfully."
-          } else {
-              Write-Host "⚠️ Backend folder not found, skipping server zip."
-          }
+          # Temp folder for copying files
+          $tempFolder = "temp_artifacts"
+          if (Test-Path $tempFolder) { Remove-Item $tempFolder -Recurse -Force }
+          mkdir $tempFolder
+
+          # Copy everything except node_modules and .git
+          Get-ChildItem -Path . -Recurse -Force |
+            Where-Object { $_.FullName -notmatch 'node_modules' -and $_.FullName -notmatch '\.git' } |
+            ForEach-Object {
+              $dest = Join-Path $tempFolder ($_.FullName.Substring($(Get-Location).Path.Length + 1))
+              if ($_.PSIsContainer) { New-Item -ItemType Directory -Path $dest -Force | Out-Null }
+              else { Copy-Item $_.FullName -Destination $dest -Force }
+            }
+
+          # Create zip inside frontend-build/<timestamp> folder
+          $zipFileName = "frontend-build-$timestamp.zip"
+          $zipPath = Join-Path $buildFolder $zipFileName
+          Compress-Archive -Path "$tempFolder/*" -DestinationPath $zipPath -Force
+          Write-Host "✅ Repository zipped as $zipPath"
 
           # Upload to Nexus
-          Write-Host "⬆️ Uploading zips to Nexus..."
+          Write-Host "⬆️ Uploading zip to Nexus..."
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
 
-          if (Test-Path "frontend-build.zip") {
-              Write-Host "Uploading frontend-build.zip..."
-              Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/juice-shop/frontend-build-${env:GITHUB_RUN_NUMBER}.zip" `
-                                -Method Put `
-                                -InFile "frontend-build.zip" `
-                                -Headers $headers
-          }
-
-          if (Test-Path "server-build.zip") {
-              Write-Host "Uploading server-build.zip..."
-              Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/juice-shop/server-build-${env:GITHUB_RUN_NUMBER}.zip" `
-                                -Method Put `
-                                -InFile "server-build.zip" `
-                                -Headers $headers
-          }
+          Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/juice-shop/$zipPath" `
+                            -Method Put `
+                            -InFile $zipPath `
+                            -Headers $headers
 
           Write-Host "✅ Nexus upload completed successfully."
+
+          # Cleanup
+          Remove-Item $tempFolder -Recurse -Force
