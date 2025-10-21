@@ -1,22 +1,43 @@
-- name: Deploy to server
-  run: |
-    Write-Host "[INFO] Starting deployment..."
+name: Manual Deployment
 
-    # === Variables ===
-    $frontendApi = "http://<YOUR_SERVER_IP_OR_DOMAIN>/api/deploy/frontend"
-    $backendApi  = "http://<YOUR_SERVER_IP_OR_DOMAIN>/api/deploy/backend"
-    $headers     = @{ Authorization = "Bearer <YOUR_API_TOKEN>" }
+on:
+  workflow_dispatch:   # lets you run it manually from Actions tab
 
-    # === Frontend Deployment ===
-    Write-Host "[INFO] Triggering frontend deployment..."
-    $frontendResp = Invoke-RestMethod -Uri $frontendApi -Headers $headers -Method POST -ErrorAction Stop
-    Write-Host "[INFO] Frontend deployment response:"
-    Write-Host ($frontendResp | ConvertTo-Json -Depth 5)
+jobs:
+  deploy:
+    name: Deploy to Server
+    runs-on: windows-latest
 
-    # === Backend Deployment ===
-    Write-Host "[INFO] Triggering backend deployment..."
-    $backendResp = Invoke-RestMethod -Uri $backendApi -Headers $headers -Method POST -ErrorAction Stop
-    Write-Host "[INFO] Backend deployment response:"
-    Write-Host ($backendResp | ConvertTo-Json -Depth 5)
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    Write-Host "[INFO] Deployment completed successfully."
+      - name: Deploy to server
+        shell: pwsh
+        run: |
+          Write-Host "[INFO] Starting deployment..."
+
+          # === Variables ===
+          $frontendApi = "http://<YOUR_SERVER_IP_OR_DOMAIN>/api/deploy/frontend"
+          $backendApi  = "http://<YOUR_SERVER_IP_OR_DOMAIN>/api/deploy/backend"
+          $headers     = @{ Authorization = "Bearer <YOUR_API_TOKEN>" }
+
+          try {
+              # === Frontend Deployment ===
+              Write-Host "[INFO] Triggering frontend deployment..."
+              $frontendResp = Invoke-RestMethod -Uri $frontendApi -Headers $headers -Method POST -ErrorAction Stop
+              Write-Host "[INFO] Frontend deployment response:"
+              Write-Host ($frontendResp | ConvertTo-Json -Depth 5)
+
+              # === Backend Deployment ===
+              Write-Host "[INFO] Triggering backend deployment..."
+              $backendResp = Invoke-RestMethod -Uri $backendApi -Headers $headers -Method POST -ErrorAction Stop
+              Write-Host "[INFO] Backend deployment response:"
+              Write-Host ($backendResp | ConvertTo-Json -Depth 5)
+
+              Write-Host "[INFO] Deployment completed successfully."
+          }
+          catch {
+              Write-Host "[ERROR] Deployment failed: $($_.Exception.Message)"
+              exit 1
+          }
