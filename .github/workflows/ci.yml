@@ -1,4 +1,4 @@
-name: Juice Shop Maven Upload
+name: Juice Shop Maven Upload - Full Repo
 
 on:
   workflow_dispatch:
@@ -8,11 +8,11 @@ jobs:
     runs-on: self-hosted
 
     steps:
-      # 1️⃣ Checkout repository (needed to access build artifacts)
-      - name: Checkout code
+      # 1️⃣ Checkout repository
+      - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2️⃣ Upload existing build artifacts to Maven repo
+      # 2️⃣ Package & Upload frontend and server builds
       - name: Package and Upload to Maven Repo
         shell: powershell
         env:
@@ -25,37 +25,39 @@ jobs:
           $headers = @{ Authorization = "Basic $base64Auth" }
 
           # --------------------------
-          # Upload frontend build
+          # FRONTEND
           # --------------------------
           $frontendSource = "frontend/dist"
-          if (Test-Path $frontendSource) {
-              $frontendZip = "frontend-build-$version.zip"
-              Compress-Archive -Path "$frontendSource/*" -DestinationPath $frontendZip -Force
-              $frontendUrl = "${env:NEXUS_URL}/com/example/juiceshop/frontend-build/$version/$frontendZip"
-              Write-Host "Uploading frontend ZIP → $frontendUrl"
-              Invoke-RestMethod -Uri $frontendUrl -Method Put -InFile $frontendZip -Headers $headers -ContentType "application/zip"
-              Write-Host "✅ Frontend uploaded successfully."
-          } else {
-              Write-Host "⚠️ frontend/dist not found, skipping frontend upload."
+          if (!(Test-Path $frontendSource)) {
+              Write-Host "❌ Frontend build not found at $frontendSource. Cannot continue."
+              exit 1
           }
 
+          $frontendZip = "frontend-build-$version.zip"
+          Compress-Archive -Path "$frontendSource/*" -DestinationPath $frontendZip -Force
+          $frontendUrl = "${env:NEXUS_URL}/com/example/juiceshop/frontend-build/$version/$frontendZip"
+          Write-Host "⬆️ Uploading frontend ZIP → $frontendUrl"
+          Invoke-RestMethod -Uri $frontendUrl -Method Put -InFile $frontendZip -Headers $headers -ContentType "application/zip"
+          Write-Host "✅ Frontend uploaded successfully."
+
           # --------------------------
-          # Upload server build
+          # SERVER (source + build)
           # --------------------------
           $serverPaths = @(
               "app.ts","server.ts","package.json","tsconfig.json",
               "models","routes","lib","data","views","rsn","config","build"
           ) | Where-Object { Test-Path $_ }
 
-          if ($serverPaths.Count -gt 0) {
-              $serverZip = "server-build-$version.zip"
-              Compress-Archive -Path $serverPaths -DestinationPath $serverZip -Force
-              $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/server-build/$version/$serverZip"
-              Write-Host "Uploading server ZIP → $serverUrl"
-              Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $serverZip -Headers $headers -ContentType "application/zip"
-              Write-Host "✅ Server uploaded successfully."
-          } else {
-              Write-Host "⚠️ No server files found, skipping server upload."
+          if ($serverPaths.Count -eq 0) {
+              Write-Host "❌ No server files found. Cannot continue."
+              exit 1
           }
 
-          Write-Host "✅ All available builds uploaded successfully!"
+          $serverZip = "server-build-$version.zip"
+          Compress-Archive -Path $serverPaths -DestinationPath $serverZip -Force
+          $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/server-build/$version/$serverZip"
+          Write-Host "⬆️ Uploading server ZIP → $serverUrl"
+          Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $serverZip -Headers $headers -ContentType "application/zip"
+          Write-Host "✅ Server uploaded successfully."
+
+          Write-Host "🎉 All mandatory builds uploaded successfully!"
