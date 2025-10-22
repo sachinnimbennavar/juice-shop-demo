@@ -1,65 +1,61 @@
-name: Juice Shop CI - Upload Only (Safe)
+name: Juice Shop Maven Upload
 
 on:
-  workflow_dispatch: # manual trigger
+  workflow_dispatch:
 
 jobs:
-  package-and-upload:
+  upload-only:
     runs-on: self-hosted
 
     steps:
-      # 1️⃣ Checkout repository
-      - name: Checkout repository
+      # 1️⃣ Checkout repository (needed to access build artifacts)
+      - name: Checkout code
         uses: actions/checkout@v3
 
-      # 2️⃣ Package & upload everything to Nexus
-      - name: Package and upload build artifacts
+      # 2️⃣ Upload existing build artifacts to Maven repo
+      - name: Package and Upload to Maven Repo
         shell: powershell
         env:
-          NEXUS_URL: http://127.0.0.1:8081/repository/juice-shop-raw
+          NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
-          Write-Host "Packaging and uploading build artifacts..."
-
-          $timestamp = Get-Date -Format "yyyyMMddHHmmss"
+          $version = (Get-Date -Format "yyyyMMddHHmmss")
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
 
-          # Repo root and temp folder
-          $repoRoot = (Get-Location).ProviderPath
-          $tempFolder = "temp_artifacts_$timestamp"
-          New-Item -ItemType Directory -Force -Path $tempFolder | Out-Null
-
-          # Copy all files except node_modules, .git, and the temp folder itself
-          $exclude = @("node_modules", ".git", $tempFolder)
-          Get-ChildItem -Recurse -File -Force | Where-Object {
-              ($exclude -notcontains $_.Name) -and ($_.FullName -notmatch '\\node_modules\\|\\.git\\|'+[regex]::Escape($tempFolder)+'\\')
-          } | ForEach-Object {
-              $relativePath = $_.FullName.Substring($repoRoot.Length + 1)
-              $dest = Join-Path $tempFolder $relativePath
-              $parentDir = Split-Path $dest
-              if (!(Test-Path $parentDir)) { New-Item -ItemType Directory -Force -Path $parentDir | Out-Null }
-              Copy-Item $_.FullName -Destination $dest -Force
+          # --------------------------
+          # Upload frontend build
+          # --------------------------
+          $frontendSource = "frontend/dist"
+          if (Test-Path $frontendSource) {
+              $frontendZip = "frontend-build-$version.zip"
+              Compress-Archive -Path "$frontendSource/*" -DestinationPath $frontendZip -Force
+              $frontendUrl = "${env:NEXUS_URL}/com/example/juiceshop/frontend-build/$version/$frontendZip"
+              Write-Host "Uploading frontend ZIP → $frontendUrl"
+              Invoke-RestMethod -Uri $frontendUrl -Method Put -InFile $frontendZip -Headers $headers -ContentType "application/zip"
+              Write-Host "✅ Frontend uploaded successfully."
+          } else {
+              Write-Host "⚠️ frontend/dist not found, skipping frontend upload."
           }
 
-          # Compress the full repository
-          $fullZip = "juice-shop-full-$timestamp.zip"
-          Compress-Archive -Path "$tempFolder/*" -DestinationPath $fullZip -Force
+          # --------------------------
+          # Upload server build
+          # --------------------------
+          $serverPaths = @(
+              "app.ts","server.ts","package.json","tsconfig.json",
+              "models","routes","lib","data","views","rsn","config","build"
+          ) | Where-Object { Test-Path $_ }
 
-          # Generate SHA256 checksum
-          $checksumFile = "$($fullZip -replace '.zip','.sha256')"
-          $checksum = Get-FileHash -Path $fullZip -Algorithm SHA256
-          $checksum.Value | Out-File -FilePath $checksumFile
+          if ($serverPaths.Count -gt 0) {
+              $serverZip = "server-build-$version.zip"
+              Compress-Archive -Path $serverPaths -DestinationPath $serverZip -Force
+              $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/server-build/$version/$serverZip"
+              Write-Host "Uploading server ZIP → $serverUrl"
+              Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $serverZip -Headers $headers -ContentType "application/zip"
+              Write-Host "✅ Server uploaded successfully."
+          } else {
+              Write-Host "⚠️ No server files found, skipping server upload."
+          }
 
-          # Upload ZIP to Nexus (Raw repo) with Content-Type
-          $nexusZipUrl = "${env:NEXUS_URL}/juice-shop-full-$timestamp.zip"
-          Write-Host "Uploading ZIP to Nexus → $nexusZipUrl"
-          Invoke-RestMethod -Uri $nexusZipUrl -Method Put -InFile $fullZip -Headers $headers -ContentType "application/zip"
-
-          # Upload checksum
-          $nexusChecksumUrl = "${env:NEXUS_URL}/juice-shop-full-$timestamp.sha256"
-          Write-Host "Uploading checksum → $nexusChecksumUrl"
-          Invoke-RestMethod -Uri $nexusChecksumUrl -Method Put -InFile $checksumFile -Headers $headers -ContentType "text/plain"
-
-          Write-Host "✅ Full repository packaged and uploaded successfully."
+          Write-Host "✅ All available builds uploaded successfully!"
