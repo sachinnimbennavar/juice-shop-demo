@@ -8,12 +8,12 @@ jobs:
     runs-on: self-hosted
 
     steps:
-      # 1️⃣ Checkout code (needed to access source files)
+      # 1️⃣ Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v3
 
       # 2️⃣ Package & upload everything to Nexus
-      - name: Package and upload build artifacts to Nexus
+      - name: Package and upload build artifacts
         shell: powershell
         env:
           NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
@@ -26,16 +26,18 @@ jobs:
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
 
-          # Create temp folders for packaging
+          # Create temp folder for packaging
           $tempFolder = "temp_artifacts_$timestamp"
           New-Item -ItemType Directory -Force -Path $tempFolder | Out-Null
 
           # Copy everything except node_modules and .git
           $exclude = @("node_modules", ".git")
           Get-ChildItem -Recurse -Force | Where-Object { $exclude -notcontains $_.Name } | ForEach-Object {
-              $dest = Join-Path $tempFolder $_.FullName.Substring((Get-Location).Path.Length + 1)
+              $relativePath = $_.FullName.Substring((Get-Location).Path.Length + 1)
+              $dest = Join-Path $tempFolder $relativePath
+
               if ($_.PSIsContainer) {
-                  New-Item -ItemType Directory -Force -Path $dest | Out-Null
+                  if (!(Test-Path $dest)) { New-Item -ItemType Directory -Force -Path $dest | Out-Null }
               } else {
                   $parentDir = Split-Path $dest
                   if (!(Test-Path $parentDir)) { New-Item -ItemType Directory -Force -Path $parentDir | Out-Null }
@@ -52,14 +54,14 @@ jobs:
           $checksum = Get-FileHash -Path $fullZip -Algorithm SHA256
           $checksum.Value | Out-File -FilePath $checksumFile
 
-          # Upload ZIP
+          # Upload ZIP to Nexus
           $nexusZipUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-build/$timestamp/$fullZip"
           Write-Host "Uploading ZIP to Nexus → $nexusZipUrl"
           Invoke-RestMethod -Uri $nexusZipUrl -Method Put -InFile $fullZip -Headers $headers
 
-          # Upload checksum
+          # Upload checksum to Nexus
           $nexusChecksumUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-build/$timestamp/$($fullZip -replace '.zip','.sha256')"
           Write-Host "Uploading checksum → $nexusChecksumUrl"
           Invoke-RestMethod -Uri $nexusChecksumUrl -Method Put -InFile $checksumFile -Headers $headers
 
-          Write-Host "✅ Full repository packaged and uploaded successfully."
+          Write-Host "Full repository packaged and uploaded successfully."
