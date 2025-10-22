@@ -1,91 +1,43 @@
-name: Juice Shop Deployment
+name: JuiceShop Build & Deploy (Local Test)
 
 on:
-  workflow_dispatch:  # Manual trigger
+  workflow_dispatch:
 
 jobs:
-  deploy:
-    runs-on: self-hosted
+  build-and-deploy:
+    runs-on: windows-latest
 
     env:
-      NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
-      DEPLOY_PATH_FRONTEND: C:\JuiceShopServer\frontend
-      DEPLOY_PATH_SERVER: C:\JuiceShopServer
-      BUILD_VERSION: 20251022135017   # 👈 Update this manually per latest Nexus build
+      DEPLOY_PATH: C:\JuiceShopServer
 
     steps:
-      - name: 🧩 Checkout Code
+      - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: ⚙️ Prepare Environment
-        shell: powershell
-        run: |
-          Write-Host "[INFO] Starting Juice Shop Deployment..."
-          Write-Host "Working directory: $PWD"
-
-      - name: 🚀 Download & Extract Builds
-        shell: powershell
-        env:
-          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
-          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
-        run: |
-          $base64Auth = [System.Convert]::ToBase64String(
-              [System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}")
-          )
-          $headers = @{ Authorization = "Basic $base64Auth" }
-
-          # --- FRONTEND ---
-          $frontendUrl = "${env:NEXUS_URL}/com/example/juiceshop/frontend-build/$env:BUILD_VERSION/frontend-build-$env:BUILD_VERSION.zip"
-          Write-Host "[INFO] Downloading frontend from $frontendUrl"
-          Invoke-WebRequest -Uri $frontendUrl -OutFile "frontend.zip" -Headers $headers
-
-          if (Test-Path "frontend.zip") {
-              Write-Host "[INFO] Extracting frontend..."
-              if (Test-Path "${env:DEPLOY_PATH_FRONTEND}") { Remove-Item -Recurse -Force "${env:DEPLOY_PATH_FRONTEND}" }
-              Expand-Archive -Path "frontend.zip" -DestinationPath "${env:DEPLOY_PATH_FRONTEND}" -Force
-              Write-Host "[SUCCESS] Frontend extracted to ${env:DEPLOY_PATH_FRONTEND}"
-          } else {
-              Write-Host "[ERROR] Frontend ZIP missing!"
-              exit 1
-          }
-
-          # --- SERVER ---
-          $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/server-build/$env:BUILD_VERSION/server-build-$env:BUILD_VERSION.zip"
-          Write-Host "[INFO] Downloading server from $serverUrl"
-          Invoke-WebRequest -Uri $serverUrl -OutFile "server.zip" -Headers $headers
-
-          if (Test-Path "server.zip") {
-              Write-Host "[INFO] Extracting server..."
-              if (Test-Path "${env:DEPLOY_PATH_SERVER}\server") { Remove-Item -Recurse -Force "${env:DEPLOY_PATH_SERVER}\server" }
-              Expand-Archive -Path "server.zip" -DestinationPath "${env:DEPLOY_PATH_SERVER}" -Force
-              Write-Host "[SUCCESS] Server extracted to ${env:DEPLOY_PATH_SERVER}"
-          } else {
-              Write-Host "[ERROR] Server ZIP missing!"
-              exit 1
-          }
-
-      - name: 🧱 Install & Build Backend
-        shell: powershell
+      - name: Install Backend Dependencies
         run: |
           Write-Host "[INFO] Installing backend dependencies..."
-          cd "${env:DEPLOY_PATH_SERVER}"
-          npm install --ignore-scripts --legacy-peer-deps
-          Write-Host "[INFO] Backend dependencies installed."
+          cd $env:DEPLOY_PATH
+          npm install
 
-      - name: 🎨 Install & Build Frontend
-        shell: powershell
+      - name: Install Frontend Dependencies (skip postinstall loop)
         run: |
-          Write-Host "[INFO] Installing and building frontend..."
-          cd "${env:DEPLOY_PATH_FRONTEND}"
-          npm install --legacy-peer-deps
+          Write-Host "[INFO] Installing frontend dependencies..."
+          cd $env:DEPLOY_PATH\frontend
+          npm install --legacy-peer-deps --ignore-scripts
+
+      - name: Build Frontend
+        run: |
+          Write-Host "[INFO] Building frontend..."
+          cd $env:DEPLOY_PATH\frontend
           npm run build
-          Write-Host "[SUCCESS] Frontend build complete."
 
-      - name: ▶️ Start Application (optional)
-        shell: powershell
+      - name: Build Server
         run: |
-          Write-Host "[INFO] Starting backend server..."
-          cd "${env:DEPLOY_PATH_SERVER}"
-          Start-Process "node" "server.js"
-          Write-Host "[SUCCESS] Backend started."
-          Write-Host "Access Juice Shop at http://localhost:3000"
+          Write-Host "[INFO] Building server..."
+          cd $env:DEPLOY_PATH
+          npm run build:server
+
+      - name: Deployment Complete
+        run: |
+          Write-Host "[SUCCESS] Frontend and backend build complete."
