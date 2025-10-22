@@ -1,66 +1,35 @@
-name: Juice Shop Deployment (Compiled & Loop-Safe)
+name: Deploy Juice Shop Server
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # Manual trigger
 
 jobs:
   deploy:
-    runs-on: self-hosted
-
-    env:
-      DEPLOY_PATH_FRONTEND: C:\JuiceShopServer\frontend
-      DEPLOY_PATH_SERVER: C:\JuiceShopServer
+    runs-on: windows-latest
 
     steps:
-      - name: 🧩 Checkout code
+      # 1️⃣ Checkout repo (if needed for other files)
+      - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: ⚡ Install & Build Backend (TypeScript Compilation)
-        shell: powershell
+      # 2️⃣ Download precompiled server from Nexus
+      - name: Download precompiled Juice Shop server
         run: |
-          Write-Host "[INFO] Installing backend dependencies (loop-safe)..."
-          cd "${env:DEPLOY_PATH_SERVER}"
-          npm install --ignore-scripts
+          $url = "https://nexus.example.com/repo/juiceshop-precompiled.zip"
+          $output = "C:\JuiceShopServer.zip"
+          Invoke-WebRequest -Uri $url -OutFile $output
+          Expand-Archive -Path $output -DestinationPath "C:\JuiceShopServer" -Force
 
-          # Check if compiled JS exists in lib
-          $jsFilesExist = Test-Path "${env:DEPLOY_PATH_SERVER}\lib\startup\validateDependenciesBasic.js"
-          if (-Not $jsFilesExist) {
-              Write-Host "[INFO] Compiled JS missing, running build:server..."
-              npm run build:server
-              Write-Host "[SUCCESS] Backend compiled into lib/"
-          } else {
-              Write-Host "[INFO] Compiled JS already exists, skipping server compilation."
-          }
+      # 3️⃣ Setup Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
 
-      - name: ⚡ Install & Build Frontend (Optional)
-        shell: powershell
-        run: |
-          if (Test-Path "${env:DEPLOY_PATH_FRONTEND}\package.json") {
-              $pkg = Get-Content "${env:DEPLOY_PATH_FRONTEND}\package.json" | Out-String
-              if ($pkg -match '"build"\s*:\s*".+?"') {
-                  Write-Host "[INFO] Installing frontend dependencies..."
-                  cd "${env:DEPLOY_PATH_FRONTEND}"
-                  npm install --legacy-peer-deps --ignore-scripts
-                  Write-Host "[INFO] Building frontend..."
-                  npm run build
-                  Write-Host "[SUCCESS] Frontend built successfully."
-              } else {
-                  Write-Host "[INFO] No build script found in frontend, skipping frontend build."
-              }
-          } else {
-              Write-Host "[INFO] Frontend folder or package.json missing, skipping frontend build."
-          }
+      # 4️⃣ Install dependencies
+      - name: Install dependencies
+        run: npm install --prefix C:\JuiceShopServer
 
-      - name: 🚀 Start Juice Shop Server
-        shell: powershell
-        run: |
-          Write-Host "[INFO] Starting Juice Shop server..."
-          cd "${env:DEPLOY_PATH_SERVER}"
-          $jsFilesExist = Test-Path "lib/startup/validateDependenciesBasic.js"
-          if ($jsFilesExist) {
-              Start-Process -NoNewWindow -FilePath "node" -ArgumentList "app.ts"
-              Write-Host "[SUCCESS] Juice Shop server started."
-          } else {
-              Write-Host "[ERROR] Compiled backend files missing. Cannot start server."
-              exit 1
-          }
+      # 5️⃣ Start Juice Shop server
+      - name: Start server
+        run: node C:\JuiceShopServer\app.js
