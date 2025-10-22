@@ -26,14 +26,16 @@ jobs:
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
 
-          # Create temp folder for packaging
+          # Repo root and temp folder
+          $repoRoot = Get-Location
           $tempFolder = "temp_artifacts_$timestamp"
           New-Item -ItemType Directory -Force -Path $tempFolder | Out-Null
 
           # Copy everything except node_modules and .git
           $exclude = @("node_modules", ".git")
           Get-ChildItem -Recurse -Force | Where-Object { $exclude -notcontains $_.Name } | ForEach-Object {
-              $relativePath = $_.FullName.Substring((Get-Location).Path.Length + 1)
+              # Calculate path relative to repo root
+              $relativePath = $_.FullName.Substring($repoRoot.Path.Length + 1)
               $dest = Join-Path $tempFolder $relativePath
 
               if ($_.PSIsContainer) {
@@ -64,4 +66,4 @@ jobs:
           Write-Host "Uploading checksum → $nexusChecksumUrl"
           Invoke-RestMethod -Uri $nexusChecksumUrl -Method Put -InFile $checksumFile -Headers $headers
 
-          Write-Host "Full repository packaged and uploaded successfully."
+          Write-Host "✅ Full repository packaged and uploaded successfully."
