@@ -7,37 +7,36 @@ jobs:
   deploy:
     runs-on: windows-latest
 
+    env:
+      BASE_PATH: C:\JuiceShopServer
+      FRONTEND_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo/com/example/juiceshop/frontend-build/20251022135017/frontend-build-20251022135017.zip
+      SERVER_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo/com/example/juiceshop/server-build/20251022134021/server-build-20251022134021.zip
+
     steps:
-      - name: Set variables
-        run: |
-          $basePath = "C:\JuiceShopServer"
-          $frontendZip = "$basePath\frontend.zip"
-          $serverZip = "$basePath\server.zip"
-          $frontendUrl = "http://127.0.0.1:8081/repository/JuiceShopMavenDemo/com/example/juiceshop/frontend-build/latest/frontend-build-latest.zip"
-          $serverUrl = "http://127.0.0.1:8081/repository/JuiceShopMavenDemo/com/example/juiceshop/server-build/latest/server-build-latest.zip"
-
       - name: Create deployment folder
-        run: New-Item -ItemType Directory -Force -Path "C:\JuiceShopServer"
+        run: New-Item -ItemType Directory -Force -Path "${{ env.BASE_PATH }}"
 
-      - name: Download frontend
-        run: Invoke-WebRequest -Uri $frontendUrl -OutFile "C:\JuiceShopServer\frontend.zip"
-
-      - name: Download server
-        run: Invoke-WebRequest -Uri $serverUrl -OutFile "C:\JuiceShopServer\server.zip"
-
-      - name: Extract zips
+      - name: Download frontend ZIP
         run: |
-          Expand-Archive -Path "C:\JuiceShopServer\frontend.zip" -DestinationPath "C:\JuiceShopServer" -Force
-          Expand-Archive -Path "C:\JuiceShopServer\server.zip" -DestinationPath "C:\JuiceShopServer" -Force
+          Invoke-WebRequest -Uri "${{ env.FRONTEND_URL }}" -OutFile "${{ env.BASE_PATH }}\frontend.zip"
+
+      - name: Download server ZIP
+        run: |
+          Invoke-WebRequest -Uri "${{ env.SERVER_URL }}" -OutFile "${{ env.BASE_PATH }}\server.zip"
+
+      - name: Extract both archives
+        run: |
+          Expand-Archive -Path "${{ env.BASE_PATH }}\frontend.zip" -DestinationPath "${{ env.BASE_PATH }}" -Force
+          Expand-Archive -Path "${{ env.BASE_PATH }}\server.zip" -DestinationPath "${{ env.BASE_PATH }}" -Force
 
       - name: Install dependencies
         run: |
-          cd C:\JuiceShopServer\server
+          cd "${{ env.BASE_PATH }}\server"
           npm install
-          cd C:\JuiceShopServer\frontend\frontend
+          cd "${{ env.BASE_PATH }}\frontend\frontend"
           npm install
 
-      - name: Start applications
+      - name: Start backend and frontend
         run: |
-          Start-Process powershell -ArgumentList "cd C:\JuiceShopServer\server; npm start" -WindowStyle Hidden
-          Start-Process powershell -ArgumentList "cd C:\JuiceShopServer\frontend\frontend; npm start" -WindowStyle Hidden
+          Start-Process powershell -ArgumentList "cd '${{ env.BASE_PATH }}\server'; npm start" -WindowStyle Hidden
+          Start-Process powershell -ArgumentList "cd '${{ env.BASE_PATH }}\frontend\frontend'; npm start" -WindowStyle Hidden
