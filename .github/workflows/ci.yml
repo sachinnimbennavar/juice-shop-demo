@@ -1,4 +1,4 @@
-name: JuiceShop Build & Deploy (From Existing Extract)
+name: JuiceShop Build & Deploy (Loop-Safe + Auto-Start)
 
 on:
   workflow_dispatch:
@@ -9,25 +9,47 @@ jobs:
 
     env:
       DEPLOY_PATH: C:\JuiceShopServer
+      FRONTEND_ZIP_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo/com/example/juiceshop/frontend-build/20251022135017/frontend-build-20251022135017.zip
+      SERVER_ZIP_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo/com/example/juiceshop/server-build/20251022135017/server-build-20251022135017.zip
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Ensure Deployment Directory Exists
+      - name: Prepare Deployment Directory
         run: |
-          Write-Host "[INFO] Checking deployment directory..."
+          Write-Host "[INFO] Creating deployment directory..."
           if (-Not (Test-Path $env:DEPLOY_PATH)) {
               New-Item -ItemType Directory -Path $env:DEPLOY_PATH
           }
 
+      - name: Download Frontend Zip from Nexus
+        run: |
+          Write-Host "[INFO] Downloading frontend from Nexus..."
+          Invoke-WebRequest -Uri $env:FRONTEND_ZIP_URL -OutFile "$env:DEPLOY_PATH\frontend.zip"
+
+      - name: Extract Frontend
+        run: |
+          Write-Host "[INFO] Extracting frontend..."
+          Expand-Archive -Path "$env:DEPLOY_PATH\frontend.zip" -DestinationPath "$env:DEPLOY_PATH\frontend" -Force
+
+      - name: Download Server Zip from Nexus
+        run: |
+          Write-Host "[INFO] Downloading server from Nexus..."
+          Invoke-WebRequest -Uri $env:SERVER_ZIP_URL -OutFile "$env:DEPLOY_PATH\server.zip"
+
+      - name: Extract Server
+        run: |
+          Write-Host "[INFO] Extracting server..."
+          Expand-Archive -Path "$env:DEPLOY_PATH\server.zip" -DestinationPath "$env:DEPLOY_PATH\server" -Force
+
       - name: Install Backend Dependencies
         run: |
           Write-Host "[INFO] Installing backend dependencies..."
-          cd $env:DEPLOY_PATH
+          cd $env:DEPLOY_PATH\server
           npm install
 
-      - name: Install Frontend Dependencies (skip postinstall loop)
+      - name: Install Frontend Dependencies (Loop-Safe)
         run: |
           Write-Host "[INFO] Installing frontend dependencies..."
           cd $env:DEPLOY_PATH\frontend
@@ -42,9 +64,16 @@ jobs:
       - name: Build Server
         run: |
           Write-Host "[INFO] Building server..."
-          cd $env:DEPLOY_PATH
+          cd $env:DEPLOY_PATH\server
           npm run build:server
+
+      - name: Start Juice Shop Server
+        run: |
+          Write-Host "[INFO] Starting Juice Shop server..."
+          cd $env:DEPLOY_PATH\server
+          Start-Process -NoNewWindow -FilePath "node" -ArgumentList "app.ts"
+          Write-Host "[SUCCESS] Server started. Juice Shop should now be running."
 
       - name: Deployment Complete
         run: |
-          Write-Host "[SUCCESS] Frontend and backend build complete."
+          Write-Host "[SUCCESS] Frontend and backend build complete. Server is running."
