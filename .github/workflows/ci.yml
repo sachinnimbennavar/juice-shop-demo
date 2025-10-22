@@ -1,100 +1,40 @@
-name: Juice Shop Full Deployment
-
-on:
-  workflow_dispatch:
-
 jobs:
   deploy:
     runs-on: self-hosted
 
     env:
-      DEPLOY_PATH: C:\JuiceShopServer
-      FRONTEND_BUILD_DIR: frontend
-      SERVER_BUILD_DIR: server
+      NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
+      DEPLOY_PATH_FRONTEND: C:\inetpub\wwwroot\juice-shop
+      DEPLOY_PATH_SERVER: C:\JuiceShopServer
 
     steps:
-      - name: 🧩 Checkout code
-        uses: actions/checkout@v3
-
       - name: ⚙️ Setup PowerShell environment
         shell: powershell
         run: |
           Write-Host "[INFO] Deployment job started..."
           Write-Host "Working directory: $PWD"
 
-      - name: 🚀 Deploy latest build from Nexus
+      - name: 🚀 Deploy from Nexus
         shell: powershell
         env:
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+          BUILD_VERSION: 20251022135017   # Use the latest version from Nexus
         run: |
-          # Determine local Nexus URL
-          $localIP = (Get-NetIPAddress -AddressFamily IPv4 |
-                      Where-Object { $_.IPAddress -notmatch '127' -and $_.IPAddress -notmatch '169' } |
-                      Select-Object -First 1 -ExpandProperty IPAddress)
-          $NEXUS_URL = "http://$localIP:8081/repository/JuiceShopMavenDemo"
-          Write-Host "[INFO] Nexus URL resolved as $NEXUS_URL"
-
           # Prepare Basic Auth
           $base64Auth = [System.Convert]::ToBase64String(
               [System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}")
           )
           $headers = @{ Authorization = "Basic $base64Auth" }
 
-          # === Get latest version from Maven metadata ===
-          try {
-              $metadataUrl = "$NEXUS_URL/com/example/juiceshop/frontend-build/maven-metadata.xml"
-              Write-Host "[INFO] Fetching Maven metadata..."
-              $metadataXml = Invoke-RestMethod -Uri $metadataUrl -Headers $headers
-              $LATEST_VERSION = $metadataXml.metadata.versioning.latest
-              Write-Host "[INFO] Latest build version: $LATEST_VERSION"
-          }
-          catch {
-              Write-Host "[ERROR] Failed to fetch Maven metadata."
-              Write-Host $_.Exception.Message
-              exit 1
-          }
+          # === FRONTEND DEPLOYMENT ===
+          $frontendUrl = "${env:NEXUS_URL}/com/example/juiceshop/frontend-build/$env:BUILD_VERSION/frontend-build-$env:BUILD_VERSION.zip"
+          Invoke-WebRequest -Uri $frontendUrl -OutFile "frontend.zip" -Headers $headers
+          Expand-Archive -Path "frontend.zip" -DestinationPath "${env:DEPLOY_PATH_FRONTEND}" -Force
+          Write-Host "[SUCCESS] Frontend deployed."
 
-          # === Download frontend ZIP ===
-          $frontendZipUrl = "$NEXUS_URL/com/example/juiceshop/frontend-build/$LATEST_VERSION/frontend-build-$LATEST_VERSION.zip"
-          $frontendZipPath = "$env:DEPLOY_PATH\frontend.zip"
-          Write-Host "[INFO] Downloading frontend ZIP..."
-          Invoke-WebRequest -Uri $frontendZipUrl -OutFile $frontendZipPath -Headers $headers
-
-          # === Download server ZIP ===
-          $serverZipUrl = "$NEXUS_URL/com/example/juiceshop/server-build/$LATEST_VERSION/server-build-$LATEST_VERSION.zip"
-          $serverZipPath = "$env:DEPLOY_PATH\server.zip"
-          Write-Host "[INFO] Downloading server ZIP..."
-          Invoke-WebRequest -Uri $serverZipUrl -OutFile $serverZipPath -Headers $headers
-
-          # === Extract ZIPs ===
-          Write-Host "[INFO] Extracting frontend..."
-          Expand-Archive -Path $frontendZipPath -DestinationPath "$env:DEPLOY_PATH\$FRONTEND_BUILD_DIR" -Force
-          Write-Host "[INFO] Extracting server..."
-          Expand-Archive -Path $serverZipPath -DestinationPath "$env:DEPLOY_PATH\$SERVER_BUILD_DIR" -Force
-
-          # === Install dependencies ===
-          Write-Host "[INFO] Installing frontend dependencies..."
-          Push-Location "$env:DEPLOY_PATH\$FRONTEND_BUILD_DIR"
-          npm install --legacy-peer-deps --prefer-offline --no-audit
-          Pop-Location
-
-          Write-Host "[INFO] Installing server dependencies..."
-          Push-Location "$env:DEPLOY_PATH\$SERVER_BUILD_DIR"
-          npm install --legacy-peer-deps --prefer-offline --no-audit
-          Pop-Location
-
-          # === Start backend server ===
-          Write-Host "[INFO] Starting backend server..."
-          Push-Location "$env:DEPLOY_PATH\$SERVER_BUILD_DIR"
-          Start-Process "node" -ArgumentList "server.js" -NoNewWindow -PassThru
-          Pop-Location
-
-          # === Start frontend ===
-          Write-Host "[INFO] Starting frontend..."
-          Push-Location "$env:DEPLOY_PATH\$FRONTEND_BUILD_DIR"
-          # Option 1: Serve built Angular app via ng serve (development mode)
-          Start-Process "npx" -ArgumentList "ng serve --host 0.0.0.0 --port 4200" -NoNewWindow -PassThru
-          Pop-Location
-
-          Write-Host "✅ Full deployment completed successfully!"
+          # === SERVER DEPLOYMENT ===
+          $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/server-build/$env:BUILD_VERSION/server-build-$env:BUILD_VERSION.zip"
+          Invoke-WebRequest -Uri $serverUrl -OutFile "server.zip" -Headers $headers
+          Expand-Archive -Path "server.zip" -DestinationPath "${env:DEPLOY_PATH_SERVER}" -Force
+          Write-Host "[SUCCESS] Server deployed."
