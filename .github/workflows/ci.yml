@@ -1,7 +1,7 @@
 name: Juice Shop Deployment
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # Manual trigger only
 
 jobs:
   deploy:
@@ -9,76 +9,72 @@ jobs:
 
     env:
       NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
-      DEPLOY_PATH_FRONTEND: C:\inetpub\wwwroot\juice-shop
+      DEPLOY_PATH_FRONTEND: C:\JuiceShopServer\frontend  # safer path for frontend
       DEPLOY_PATH_SERVER: C:\JuiceShopServer
 
     steps:
-      - name: Checkout repository
+      - name: 🧩 Checkout code
         uses: actions/checkout@v3
 
-      - name: Setup PowerShell environment
+      - name: ⚙️ Setup PowerShell environment
         shell: powershell
         run: |
           Write-Host "[INFO] Deployment job started..."
           Write-Host "Working directory: $PWD"
 
-      - name: Deploy from Nexus
+      - name: 🚀 Deploy from Nexus
         shell: powershell
         env:
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
-          BUILD_VERSION: 20251022135017  # Change to latest version
+          BUILD_VERSION: 20251022135017  # latest version from Nexus
         run: |
           Write-Host "[INFO] Starting deployment..."
-
+          
           # Prepare Basic Auth
           $base64Auth = [System.Convert]::ToBase64String(
               [System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}")
           )
           $headers = @{ Authorization = "Basic $base64Auth" }
 
-          # === FRONTEND ===
+          # === FRONTEND DEPLOYMENT ===
           try {
               $frontendUrl = "${env:NEXUS_URL}/com/example/juiceshop/frontend-build/$env:BUILD_VERSION/frontend-build-$env:BUILD_VERSION.zip"
               Write-Host "[INFO] Downloading frontend from $frontendUrl ..."
               Invoke-WebRequest -Uri $frontendUrl -OutFile "frontend.zip" -Headers $headers
 
               if (Test-Path "frontend.zip") {
-                  $tempFrontend = "C:\Temp\frontend-extract"
-                  Remove-Item -Path $tempFrontend -Recurse -Force -ErrorAction SilentlyContinue
-                  Expand-Archive -Path "frontend.zip" -DestinationPath $tempFrontend -Force
-                  Write-Host "[INFO] Copying frontend files to ${env:DEPLOY_PATH_FRONTEND} ..."
-                  Copy-Item -Path "$tempFrontend\*" -Destination $env:DEPLOY_PATH_FRONTEND -Recurse -Force
+                  Write-Host "[INFO] Extracting frontend to ${env:DEPLOY_PATH_FRONTEND} ..."
+                  Expand-Archive -Path "frontend.zip" -DestinationPath "${env:DEPLOY_PATH_FRONTEND}" -Force
                   Write-Host "[SUCCESS] Frontend deployed successfully."
               } else {
                   Write-Host "[ERROR] Frontend ZIP not downloaded."
                   exit 1
               }
-          } catch {
-              Write-Host "[ERROR] Frontend deployment failed."
+          }
+          catch {
+              Write-Host "[ERROR] Failed to download frontend ZIP from Nexus."
               Write-Host $_.Exception.Message
               exit 1
           }
 
-          # === SERVER ===
+          # === SERVER DEPLOYMENT ===
           try {
               $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/server-build/$env:BUILD_VERSION/server-build-$env:BUILD_VERSION.zip"
               Write-Host "[INFO] Downloading server from $serverUrl ..."
               Invoke-WebRequest -Uri $serverUrl -OutFile "server.zip" -Headers $headers
 
               if (Test-Path "server.zip") {
-                  $tempServer = "C:\Temp\server-extract"
-                  Remove-Item -Path $tempServer -Recurse -Force -ErrorAction SilentlyContinue
-                  Expand-Archive -Path "server.zip" -DestinationPath $tempServer -Force
-                  Write-Host "[INFO] Copying server files to ${env:DEPLOY_PATH_SERVER} ..."
-                  Copy-Item -Path "$tempServer\*" -Destination $env:DEPLOY_PATH_SERVER -Recurse -Force
+                  Write-Host "[INFO] Extracting server to ${env:DEPLOY_PATH_SERVER} ..."
+                  Expand-Archive -Path "server.zip" -DestinationPath "${env:DEPLOY_PATH_SERVER}" -Force
                   Write-Host "[SUCCESS] Server deployed successfully."
               } else {
                   Write-Host "[ERROR] Server ZIP not downloaded."
                   exit 1
               }
-          } catch {
-              Write-Host "[ERROR] Server deployment failed."
+          }
+          catch {
+              Write-Host "[ERROR] Failed to download server ZIP from Nexus."
               Write-Host $_.Exception.Message
               exit 1
           }
