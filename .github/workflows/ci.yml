@@ -1,7 +1,7 @@
-name: Juice Shop Deployment (From Existing Extracted Folders)
+name: Juice Shop Deployment (Loop-Safe)
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # Manual trigger
 
 jobs:
   deploy:
@@ -15,21 +15,24 @@ jobs:
       - name: 🧩 Checkout code
         uses: actions/checkout@v3
 
-      - name: ⚡ Install & Build Application
+      - name: ⚡ Install & Build Application (Loop-Safe)
         shell: powershell
         run: |
-          Write-Host "[INFO] Installing backend dependencies..."
+          # === BACKEND DEPENDENCIES (skip postinstall to avoid loop) ===
+          Write-Host "[INFO] Installing backend dependencies (loop-safe)..."
           cd "${env:DEPLOY_PATH_SERVER}"
-          npm install
+          npm install --ignore-scripts
 
-          Write-Host "[INFO] Installing frontend dependencies (loop-safe)..."
+          # === FRONTEND DEPENDENCIES (loop-safe) ===
+          Write-Host "[INFO] Installing frontend dependencies..."
           cd "${env:DEPLOY_PATH_FRONTEND}"
           npm install --legacy-peer-deps --ignore-scripts
 
+          # === BUILD FRONTEND ===
           Write-Host "[INFO] Building frontend..."
-          cd "${env:DEPLOY_PATH_FRONTEND}"
           npm run build
 
+          # === BUILD SERVER ===
           Write-Host "[INFO] Building server..."
           cd "${env:DEPLOY_PATH_SERVER}"
           npm run build:server
