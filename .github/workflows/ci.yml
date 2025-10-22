@@ -1,7 +1,7 @@
-name: Juice Shop Deployment (Loop-Safe)
+name: Juice Shop Deployment (Safe & Loop-Free)
 
 on:
-  workflow_dispatch:  # Manual trigger
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -15,34 +15,50 @@ jobs:
       - name: 🧩 Checkout code
         uses: actions/checkout@v3
 
-      - name: ⚡ Install & Build Application (Loop-Safe)
+      - name: ⚡ Install & Build Backend
         shell: powershell
         run: |
-          # === BACKEND DEPENDENCIES (skip postinstall to avoid loop) ===
           Write-Host "[INFO] Installing backend dependencies (loop-safe)..."
           cd "${env:DEPLOY_PATH_SERVER}"
           npm install --ignore-scripts
 
-          # === FRONTEND DEPENDENCIES (loop-safe) ===
-          Write-Host "[INFO] Installing frontend dependencies..."
-          cd "${env:DEPLOY_PATH_FRONTEND}"
-          npm install --legacy-peer-deps --ignore-scripts
+          # Compile TypeScript only if lib folder is missing
+          if (-Not (Test-Path "${env:DEPLOY_PATH_SERVER}\lib")) {
+              Write-Host "[INFO] lib folder missing, building server..."
+              npm run build:server
+              Write-Host "[SUCCESS] Server compiled into lib/"
+          } else {
+              Write-Host "[INFO] lib folder exists, skipping compilation."
+          }
 
-          # === BUILD FRONTEND ===
-          Write-Host "[INFO] Building frontend..."
-          npm run build
-
-          # === BUILD SERVER ===
-          Write-Host "[INFO] Building server..."
-          cd "${env:DEPLOY_PATH_SERVER}"
-          npm run build:server
-
-          Write-Host "[SUCCESS] Application built successfully."
+      - name: ⚡ Install & Build Frontend (if available)
+        shell: powershell
+        run: |
+          if (Test-Path "${env:DEPLOY_PATH_FRONTEND}\package.json") {
+              $pkg = Get-Content "${env:DEPLOY_PATH_FRONTEND}\package.json" | Out-String
+              if ($pkg -match '"build"\s*:\s*".+?"') {
+                  Write-Host "[INFO] Installing frontend dependencies..."
+                  cd "${env:DEPLOY_PATH_FRONTEND}"
+                  npm install --legacy-peer-deps --ignore-scripts
+                  Write-Host "[INFO] Building frontend..."
+                  npm run build
+                  Write-Host "[SUCCESS] Frontend built successfully."
+              } else {
+                  Write-Host "[INFO] No build script found in frontend, skipping build."
+              }
+          } else {
+              Write-Host "[INFO] Frontend folder or package.json missing, skipping frontend build."
+          }
 
       - name: 🚀 Start Juice Shop Server
         shell: powershell
         run: |
           Write-Host "[INFO] Starting Juice Shop server..."
           cd "${env:DEPLOY_PATH_SERVER}"
-          Start-Process -NoNewWindow -FilePath "node" -ArgumentList "app.ts"
-          Write-Host "[SUCCESS] Juice Shop server started."
+          if (Test-Path "lib/startup/validateDependenciesBasic.js") {
+              Start-Process -NoNewWindow -FilePath "node" -ArgumentList "app.ts"
+              Write-Host "[SUCCESS] Juice Shop server started."
+          } else {
+              Write-Host "[ERROR] lib/startup/validateDependenciesBasic.js missing, cannot start server."
+              exit 1
+          }
