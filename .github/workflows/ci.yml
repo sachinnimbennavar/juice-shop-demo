@@ -1,4 +1,4 @@
-name: Juice Shop Deployment (Safe & Loop-Free)
+name: Juice Shop Deployment (Compiled & Loop-Safe)
 
 on:
   workflow_dispatch:
@@ -15,23 +15,24 @@ jobs:
       - name: 🧩 Checkout code
         uses: actions/checkout@v3
 
-      - name: ⚡ Install & Build Backend
+      - name: ⚡ Install & Build Backend (TypeScript Compilation)
         shell: powershell
         run: |
           Write-Host "[INFO] Installing backend dependencies (loop-safe)..."
           cd "${env:DEPLOY_PATH_SERVER}"
           npm install --ignore-scripts
 
-          # Compile TypeScript only if lib folder is missing
-          if (-Not (Test-Path "${env:DEPLOY_PATH_SERVER}\lib")) {
-              Write-Host "[INFO] lib folder missing, building server..."
+          # Check if compiled JS exists in lib
+          $jsFilesExist = Test-Path "${env:DEPLOY_PATH_SERVER}\lib\startup\validateDependenciesBasic.js"
+          if (-Not $jsFilesExist) {
+              Write-Host "[INFO] Compiled JS missing, running build:server..."
               npm run build:server
-              Write-Host "[SUCCESS] Server compiled into lib/"
+              Write-Host "[SUCCESS] Backend compiled into lib/"
           } else {
-              Write-Host "[INFO] lib folder exists, skipping compilation."
+              Write-Host "[INFO] Compiled JS already exists, skipping server compilation."
           }
 
-      - name: ⚡ Install & Build Frontend (if available)
+      - name: ⚡ Install & Build Frontend (Optional)
         shell: powershell
         run: |
           if (Test-Path "${env:DEPLOY_PATH_FRONTEND}\package.json") {
@@ -44,7 +45,7 @@ jobs:
                   npm run build
                   Write-Host "[SUCCESS] Frontend built successfully."
               } else {
-                  Write-Host "[INFO] No build script found in frontend, skipping build."
+                  Write-Host "[INFO] No build script found in frontend, skipping frontend build."
               }
           } else {
               Write-Host "[INFO] Frontend folder or package.json missing, skipping frontend build."
@@ -55,10 +56,11 @@ jobs:
         run: |
           Write-Host "[INFO] Starting Juice Shop server..."
           cd "${env:DEPLOY_PATH_SERVER}"
-          if (Test-Path "lib/startup/validateDependenciesBasic.js") {
+          $jsFilesExist = Test-Path "lib/startup/validateDependenciesBasic.js"
+          if ($jsFilesExist) {
               Start-Process -NoNewWindow -FilePath "node" -ArgumentList "app.ts"
               Write-Host "[SUCCESS] Juice Shop server started."
           } else {
-              Write-Host "[ERROR] lib/startup/validateDependenciesBasic.js missing, cannot start server."
+              Write-Host "[ERROR] Compiled backend files missing. Cannot start server."
               exit 1
           }
