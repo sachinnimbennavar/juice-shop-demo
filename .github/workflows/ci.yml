@@ -1,42 +1,100 @@
-name: CD Pipeline
+name: Juice Shop Full Deployment
 
 on:
   workflow_dispatch:
 
 jobs:
   deploy:
-    runs-on: windows-latest
+    runs-on: self-hosted
 
     env:
-      BASE_PATH: C:\JuiceShopServer
-      FRONTEND_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo/com/example/juiceshop/frontend-build/20251022135017/frontend-build-20251022135017.zip
-      SERVER_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo/com/example/juiceshop/server-build/20251022134021/server-build-20251022134021.zip
+      DEPLOY_PATH: C:\JuiceShopServer
+      FRONTEND_BUILD_DIR: frontend
+      SERVER_BUILD_DIR: server
 
     steps:
-      - name: Create deployment folder
-        run: New-Item -ItemType Directory -Force -Path "${{ env.BASE_PATH }}"
+      - name: 🧩 Checkout code
+        uses: actions/checkout@v3
 
-      - name: Download frontend ZIP
+      - name: ⚙️ Setup PowerShell environment
+        shell: powershell
         run: |
-          Invoke-WebRequest -Uri "${{ env.FRONTEND_URL }}" -OutFile "${{ env.BASE_PATH }}\frontend.zip"
+          Write-Host "[INFO] Deployment job started..."
+          Write-Host "Working directory: $PWD"
 
-      - name: Download server ZIP
+      - name: 🚀 Deploy latest build from Nexus
+        shell: powershell
+        env:
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
-          Invoke-WebRequest -Uri "${{ env.SERVER_URL }}" -OutFile "${{ env.BASE_PATH }}\server.zip"
+          # Determine local Nexus URL
+          $localIP = (Get-NetIPAddress -AddressFamily IPv4 |
+                      Where-Object { $_.IPAddress -notmatch '127' -and $_.IPAddress -notmatch '169' } |
+                      Select-Object -First 1 -ExpandProperty IPAddress)
+          $NEXUS_URL = "http://$localIP:8081/repository/JuiceShopMavenDemo"
+          Write-Host "[INFO] Nexus URL resolved as $NEXUS_URL"
 
-      - name: Extract both archives
-        run: |
-          Expand-Archive -Path "${{ env.BASE_PATH }}\frontend.zip" -DestinationPath "${{ env.BASE_PATH }}" -Force
-          Expand-Archive -Path "${{ env.BASE_PATH }}\server.zip" -DestinationPath "${{ env.BASE_PATH }}" -Force
+          # Prepare Basic Auth
+          $base64Auth = [System.Convert]::ToBase64String(
+              [System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}")
+          )
+          $headers = @{ Authorization = "Basic $base64Auth" }
 
-      - name: Install dependencies
-        run: |
-          cd "${{ env.BASE_PATH }}\server"
-          npm install
-          cd "${{ env.BASE_PATH }}\frontend\frontend"
-          npm install
+          # === Get latest version from Maven metadata ===
+          try {
+              $metadataUrl = "$NEXUS_URL/com/example/juiceshop/frontend-build/maven-metadata.xml"
+              Write-Host "[INFO] Fetching Maven metadata..."
+              $metadataXml = Invoke-RestMethod -Uri $metadataUrl -Headers $headers
+              $LATEST_VERSION = $metadataXml.metadata.versioning.latest
+              Write-Host "[INFO] Latest build version: $LATEST_VERSION"
+          }
+          catch {
+              Write-Host "[ERROR] Failed to fetch Maven metadata."
+              Write-Host $_.Exception.Message
+              exit 1
+          }
 
-      - name: Start backend and frontend
-        run: |
-          Start-Process powershell -ArgumentList "cd '${{ env.BASE_PATH }}\server'; npm start" -WindowStyle Hidden
-          Start-Process powershell -ArgumentList "cd '${{ env.BASE_PATH }}\frontend\frontend'; npm start" -WindowStyle Hidden
+          # === Download frontend ZIP ===
+          $frontendZipUrl = "$NEXUS_URL/com/example/juiceshop/frontend-build/$LATEST_VERSION/frontend-build-$LATEST_VERSION.zip"
+          $frontendZipPath = "$env:DEPLOY_PATH\frontend.zip"
+          Write-Host "[INFO] Downloading frontend ZIP..."
+          Invoke-WebRequest -Uri $frontendZipUrl -OutFile $frontendZipPath -Headers $headers
+
+          # === Download server ZIP ===
+          $serverZipUrl = "$NEXUS_URL/com/example/juiceshop/server-build/$LATEST_VERSION/server-build-$LATEST_VERSION.zip"
+          $serverZipPath = "$env:DEPLOY_PATH\server.zip"
+          Write-Host "[INFO] Downloading server ZIP..."
+          Invoke-WebRequest -Uri $serverZipUrl -OutFile $serverZipPath -Headers $headers
+
+          # === Extract ZIPs ===
+          Write-Host "[INFO] Extracting frontend..."
+          Expand-Archive -Path $frontendZipPath -DestinationPath "$env:DEPLOY_PATH\$FRONTEND_BUILD_DIR" -Force
+          Write-Host "[INFO] Extracting server..."
+          Expand-Archive -Path $serverZipPath -DestinationPath "$env:DEPLOY_PATH\$SERVER_BUILD_DIR" -Force
+
+          # === Install dependencies ===
+          Write-Host "[INFO] Installing frontend dependencies..."
+          Push-Location "$env:DEPLOY_PATH\$FRONTEND_BUILD_DIR"
+          npm install --legacy-peer-deps --prefer-offline --no-audit
+          Pop-Location
+
+          Write-Host "[INFO] Installing server dependencies..."
+          Push-Location "$env:DEPLOY_PATH\$SERVER_BUILD_DIR"
+          npm install --legacy-peer-deps --prefer-offline --no-audit
+          Pop-Location
+
+          # === Start backend server ===
+          Write-Host "[INFO] Starting backend server..."
+          Push-Location "$env:DEPLOY_PATH\$SERVER_BUILD_DIR"
+          Start-Process "node" -ArgumentList "server.js" -NoNewWindow -PassThru
+          Pop-Location
+
+          # === Start frontend ===
+          Write-Host "[INFO] Starting frontend..."
+          Push-Location "$env:DEPLOY_PATH\$FRONTEND_BUILD_DIR"
+          # Option 1: Serve built Angular app via ng serve (development mode)
+          Start-Process "npx" -ArgumentList "ng serve --host 0.0.0.0 --port 4200" -NoNewWindow -PassThru
+          Pop-Location
+
+          Write-Host "✅ Full deployment completed successfully!"
