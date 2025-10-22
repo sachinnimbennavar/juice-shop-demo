@@ -1,51 +1,58 @@
-name: Juice Shop Start from Extracted Builds
+name: Juice Shop Deployment (Resume from Extracted ZIPs)
 
 on:
   workflow_dispatch:  # Manual trigger only
 
 jobs:
-  start:
+  deploy:
     runs-on: self-hosted
 
     env:
       DEPLOY_PATH_FRONTEND: C:\JuiceShopServer\frontend
       DEPLOY_PATH_SERVER: C:\JuiceShopServer
-      NODE_OPTIONS: --max_old_space_size=4096
 
     steps:
       - name: ⚙️ Setup PowerShell environment
         shell: powershell
         run: |
-          Write-Host "[INFO] Starting job from extracted builds..."
+          Write-Host "[INFO] Deployment job started..."
           Write-Host "Working directory: $PWD"
 
-      - name: 🛑 Stop Existing Processes
+      - name: 🖥️ Install backend dependencies
         shell: powershell
         run: |
-          Write-Host "[INFO] Stopping old backend processes (node server)..."
-          Get-Process node -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "*server.js*" } | Stop-Process -Force
-          
-          Write-Host "[INFO] Stopping old frontend processes (ng serve)..."
-          Get-Process node -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "*ng*" } | Stop-Process -Force
+          Write-Host "[INFO] Installing server dependencies..."
+          cd $env:DEPLOY_PATH_SERVER
+          if (Test-Path "package-lock.json") {
+              Write-Host "[INFO] Cleaning previous node_modules..."
+              Remove-Item -Recurse -Force node_modules
+          }
+          npm install --legacy-peer-deps
+          Write-Host "[SUCCESS] Backend dependencies installed."
 
-      - name: 📦 Install Dependencies
+      - name: 🖌️ Install frontend dependencies & build
         shell: powershell
         run: |
-          Write-Host "[INFO] Installing backend dependencies..."
-          Set-Location "${env:DEPLOY_PATH_SERVER}"
-          npm install --prefer-offline --no-audit
-          
           Write-Host "[INFO] Installing frontend dependencies..."
-          Set-Location "${env:DEPLOY_PATH_FRONTEND}"
-          npm install --legacy-peer-deps --prefer-offline --no-audit
+          cd $env:DEPLOY_PATH_FRONTEND
+          if (Test-Path "package-lock.json") {
+              Write-Host "[INFO] Cleaning previous node_modules..."
+              Remove-Item -Recurse -Force node_modules
+          }
+          npm install --legacy-peer-deps
+          Write-Host "[INFO] Building frontend..."
+          npm run build:frontend
+          Write-Host "[SUCCESS] Frontend build complete."
 
-      - name: 🚀 Start Backend and Frontend
+      - name: 🚀 Build server
         shell: powershell
         run: |
-          Write-Host "[INFO] Starting backend..."
-          Start-Process -NoNewWindow -FilePath "node" -ArgumentList "server.js" -WorkingDirectory "${env:DEPLOY_PATH_SERVER}"
+          Write-Host "[INFO] Building server..."
+          cd $env:DEPLOY_PATH_SERVER
+          npm run build:server
+          Write-Host "[SUCCESS] Server build complete."
 
-          Write-Host "[INFO] Starting frontend..."
-          Start-Process -NoNewWindow -FilePath "npx" -ArgumentList "ng serve --port 4200 --host 0.0.0.0 --disable-host-check" -WorkingDirectory "${env:DEPLOY_PATH_FRONTEND}"
-
-          Write-Host "[SUCCESS] Both frontend and backend started successfully!"
+      - name: ✅ Deployment Complete
+        shell: powershell
+        run: |
+          Write-Host "🎉 Deployment completed successfully!"
