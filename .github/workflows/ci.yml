@@ -1,4 +1,4 @@
-name: JuiceShop Build & Deploy (Local Test)
+name: JuiceShop Build & Deploy (Manual Test)
 
 on:
   workflow_dispatch:
@@ -8,16 +8,29 @@ jobs:
     runs-on: windows-latest
 
     env:
-      DEPLOY_PATH: C:\JuiceShopServer
+      DEPLOY_PATH: ${{ github.workspace }}\JuiceShopServer  # Use repo folder on runner
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
 
+      - name: Prepare Deployment Directory
+        run: |
+          Write-Host "[INFO] Creating deployment directory..."
+          if (-Not (Test-Path $env:DEPLOY_PATH)) {
+              New-Item -ItemType Directory -Path $env:DEPLOY_PATH
+          }
+
+      - name: Copy Repo Files to Deploy Path
+        run: |
+          Write-Host "[INFO] Copying frontend and server files to deployment path..."
+          Copy-Item -Path "${{ github.workspace }}\frontend" -Destination "$env:DEPLOY_PATH\frontend" -Recurse -Force
+          Copy-Item -Path "${{ github.workspace }}\server" -Destination "$env:DEPLOY_PATH\server" -Recurse -Force
+
       - name: Install Backend Dependencies
         run: |
           Write-Host "[INFO] Installing backend dependencies..."
-          cd $env:DEPLOY_PATH
+          cd $env:DEPLOY_PATH\server
           npm install
 
       - name: Install Frontend Dependencies (skip postinstall loop)
@@ -35,7 +48,7 @@ jobs:
       - name: Build Server
         run: |
           Write-Host "[INFO] Building server..."
-          cd $env:DEPLOY_PATH
+          cd $env:DEPLOY_PATH\server
           npm run build:server
 
       - name: Deployment Complete
