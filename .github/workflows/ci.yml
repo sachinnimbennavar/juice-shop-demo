@@ -1,50 +1,86 @@
-name: Nexus Upload Full Repo with Frontend Build
+name: Juice Shop CI
 
 on:
-  workflow_dispatch:  # Manual trigger
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch: # allow manual trigger
+    inputs:
+      reason:
+        description: "Reason for manual trigger"
+        required: false
 
 jobs:
-  upload:
+  build:
     runs-on: self-hosted
 
     steps:
-      # 1️⃣ Checkout repository
+      # 1️⃣ Checkout the repository
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2️⃣ Set Node memory (optional for large builds)
+      # 2️⃣ Set Node memory for server build
       - name: Set Node memory
         run: set NODE_OPTIONS=--max_old_space_size=4096
 
-      # 3️⃣ Install frontend dependencies
+      # 3️⃣ Cache frontend dependencies and Angular build output
+      - name: Cache frontend
+        uses: actions/cache@v3
+        with:
+          path: |
+            frontend/node_modules
+            frontend/dist
+            frontend/.angular
+          key: ${{ runner.os }}-frontend-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-frontend-
+
+      # 4️⃣ Cache server dependencies
+      - name: Cache server
+        uses: actions/cache@v3
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-server-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-server-
+
+      # 5️⃣ Install frontend dependencies
       - name: Install frontend dependencies
         run: |
           cd frontend
           npm install --legacy-peer-deps --prefer-offline --no-audit
           cd ..
 
-      # 4️⃣ Build frontend if missing
-      - name: Build frontend if missing
+      # 6️⃣ Build frontend (Angular incremental build handled automatically)
+      - name: Build frontend
         run: |
-          if (!(Test-Path "frontend/dist") -or (Get-ChildItem "frontend/dist" | Measure-Object).Count -eq 0) {
-              Write-Host "🟢 frontend/dist not found. Building frontend..."
-              cd frontend
-              npm run build -- --configuration production --watch=false --verbose
-              cd ..
-          } else {
-              Write-Host "✅ frontend/dist already exists. Skipping build."
-          }
-        shell: powershell
+          cd frontend
+          npm run build -- --configuration production --watch=false --verbose
+          cd ..
 
-      # 5️⃣ Install server dependencies
+      # 7️⃣ Install server dependencies
       - name: Install server dependencies
         run: npm install --prefer-offline --no-audit
 
-      # 6️⃣ Build server
+      # 8️⃣ Build server
       - name: Build server
         run: npm run build:server
 
-      # 7️⃣ Package and Upload Full Repo
+      # 9️⃣ Optional SonarQube analysis (safe skip if not installed)
+      - name: SonarQube Scan
+        run: |
+          if (Get-Command sonar-scanner -ErrorAction SilentlyContinue) {
+              echo "Running SonarQube scanner..."
+              set SONAR_HOST_URL=http://127.0.0.1:9000
+              sonar-scanner
+          } else {
+              echo "sonar-scanner not found, skipping SonarQube analysis."
+          }
+
+      # 🔟 Package and Upload Full Repository
       - name: Package and Upload Repo to Nexus
         shell: powershell
         env:
@@ -54,42 +90,40 @@ jobs:
         run: |
           Write-Host "🧩 Preparing full repository zip (excluding node_modules)..."
 
-          # Timestamp for folder and file
           $timestamp = Get-Date -Format "yyyyMMddHHmmss"
           $buildFolder = "frontend-build/$timestamp"
-          mkdir $buildFolder -Force
+          New-Item -ItemType Directory -Force -Path $buildFolder | Out-Null
 
-          # Temp folder for copying files
           $tempFolder = "temp_artifacts"
           if (Test-Path $tempFolder) { Remove-Item $tempFolder -Recurse -Force }
-          mkdir $tempFolder
+          New-Item -ItemType Directory -Force -Path $tempFolder | Out-Null
 
-          # Copy everything except node_modules and .git
-          Get-ChildItem -Path . -Recurse -Force |
-            Where-Object { $_.FullName -notmatch 'node_modules' -and $_.FullName -notmatch '\.git' } |
-            ForEach-Object {
-              $dest = Join-Path $tempFolder ($_.FullName.Substring($(Get-Location).Path.Length + 1))
-              if ($_.PSIsContainer) { New-Item -ItemType Directory -Path $dest -Force | Out-Null }
-              else { Copy-Item $_.FullName -Destination $dest -Force }
-            }
+          Write-Host "📁 Copying all repo files except node_modules and .git..."
+          robocopy . $tempFolder /E /XD node_modules .git /NFL /NDL /NJH /NJS /NC /NS
+          if ($LASTEXITCODE -lt 8) {
+              Write-Host "✅ Files copied successfully."
+          } else {
+              Write-Host "❌ robocopy failed with exit code $LASTEXITCODE"
+              exit 1
+          }
 
-          # Create zip inside frontend-build/<timestamp> folder
           $zipFileName = "frontend-build-$timestamp.zip"
           $zipPath = Join-Path $buildFolder $zipFileName
-          Compress-Archive -Path "$tempFolder/*" -DestinationPath $zipPath -Force
-          Write-Host "✅ Repository zipped as $zipPath"
 
-          # Upload to Nexus
+          Write-Host "📦 Compressing all files to $zipPath ..."
+          Compress-Archive -Path "$tempFolder/*" -DestinationPath $zipPath -Force
+          Write-Host "✅ Repository zipped successfully."
+
+          # Optional checksum (SHA256)
+          $checksum = Get-FileHash -Path $zipPath -Algorithm SHA256
+          $checksum.Value | Out-File -FilePath (Join-Path $buildFolder "frontend-build-$timestamp.sha256")
+
           Write-Host "⬆️ Uploading zip to Nexus..."
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
 
-          Invoke-RestMethod -Uri "${env:NEXUS_URL}/repository/juice-shop/$zipPath" `
-                            -Method Put `
-                            -InFile $zipPath `
-                            -Headers $headers
+          $nexusTarget = "${env:NEXUS_URL}/repository/juice-shop/com/example/juiceshop/frontend-build/$timestamp/$zipFileName"
+          Invoke-RestMethod -Uri $nexusTarget -Method Put -InFile $zipPath -Headers $headers
 
           Write-Host "✅ Nexus upload completed successfully."
-
-          # Cleanup
           Remove-Item $tempFolder -Recurse -Force
