@@ -1,7 +1,7 @@
-name: Juice Shop Deployment (CD Only)
+name: Juice Shop Deployment
 
 on:
-  workflow_dispatch:  # Manual trigger
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -13,20 +13,25 @@ jobs:
       DEPLOY_PATH_SERVER: C:\JuiceShopServer
 
     steps:
-      - name: ⚙️ Setup PowerShell environment
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Setup PowerShell environment
         shell: powershell
         run: |
           Write-Host "[INFO] Deployment job started..."
           Write-Host "Working directory: $PWD"
 
-      - name: 🚀 Deploy latest build from Nexus
+      - name: Deploy from Nexus
         shell: powershell
         env:
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
-          BUILD_VERSION: 20251022135017   # Update with latest Nexus version
+          BUILD_VERSION: 20251022135017  # Change to latest version
         run: |
-          Write-Host "[INFO] Preparing Basic Auth..."
+          Write-Host "[INFO] Starting deployment..."
+
+          # Prepare Basic Auth
           $base64Auth = [System.Convert]::ToBase64String(
               [System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}")
           )
@@ -39,11 +44,14 @@ jobs:
               Invoke-WebRequest -Uri $frontendUrl -OutFile "frontend.zip" -Headers $headers
 
               if (Test-Path "frontend.zip") {
-                  Write-Host "[INFO] Extracting frontend to ${env:DEPLOY_PATH_FRONTEND} ..."
-                  Expand-Archive -Path "frontend.zip" -DestinationPath "${env:DEPLOY_PATH_FRONTEND}" -Force
+                  $tempFrontend = "C:\Temp\frontend-extract"
+                  Remove-Item -Path $tempFrontend -Recurse -Force -ErrorAction SilentlyContinue
+                  Expand-Archive -Path "frontend.zip" -DestinationPath $tempFrontend -Force
+                  Write-Host "[INFO] Copying frontend files to ${env:DEPLOY_PATH_FRONTEND} ..."
+                  Copy-Item -Path "$tempFrontend\*" -Destination $env:DEPLOY_PATH_FRONTEND -Recurse -Force
                   Write-Host "[SUCCESS] Frontend deployed successfully."
               } else {
-                  Write-Host "[ERROR] Frontend ZIP not found!"
+                  Write-Host "[ERROR] Frontend ZIP not downloaded."
                   exit 1
               }
           } catch {
@@ -59,11 +67,14 @@ jobs:
               Invoke-WebRequest -Uri $serverUrl -OutFile "server.zip" -Headers $headers
 
               if (Test-Path "server.zip") {
-                  Write-Host "[INFO] Extracting server to ${env:DEPLOY_PATH_SERVER} ..."
-                  Expand-Archive -Path "server.zip" -DestinationPath "${env:DEPLOY_PATH_SERVER}" -Force
+                  $tempServer = "C:\Temp\server-extract"
+                  Remove-Item -Path $tempServer -Recurse -Force -ErrorAction SilentlyContinue
+                  Expand-Archive -Path "server.zip" -DestinationPath $tempServer -Force
+                  Write-Host "[INFO] Copying server files to ${env:DEPLOY_PATH_SERVER} ..."
+                  Copy-Item -Path "$tempServer\*" -Destination $env:DEPLOY_PATH_SERVER -Recurse -Force
                   Write-Host "[SUCCESS] Server deployed successfully."
               } else {
-                  Write-Host "[ERROR] Server ZIP not found!"
+                  Write-Host "[ERROR] Server ZIP not downloaded."
                   exit 1
               }
           } catch {
