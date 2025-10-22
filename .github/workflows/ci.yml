@@ -1,35 +1,86 @@
-name: Deploy Juice Shop Server
+name: Juice Shop Deployment
 
 on:
-  workflow_dispatch: # Manual trigger
+  workflow_dispatch:  # Manual trigger only
 
 jobs:
   deploy:
-    runs-on: windows-latest
+    runs-on: self-hosted
+
+    env:
+      NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
+      DEPLOY_PATH_FRONTEND: C:\JuiceShopServer\frontend
+      DEPLOY_PATH_SERVER: C:\JuiceShopServer
 
     steps:
-      # 1️⃣ Checkout repo (if needed for other files)
-      - name: Checkout code
+      - name: 🧩 Checkout code
         uses: actions/checkout@v3
 
-      # 2️⃣ Download precompiled server from Nexus
-      - name: Download precompiled Juice Shop server
+      - name: ⚙️ Setup PowerShell environment
+        shell: powershell
         run: |
-          $url = "https://nexus.example.com/repo/juiceshop-precompiled.zip"
-          $output = "C:\JuiceShopServer.zip"
-          Invoke-WebRequest -Uri $url -OutFile $output
-          Expand-Archive -Path $output -DestinationPath "C:\JuiceShopServer" -Force
+          Write-Host "[INFO] Deployment job started..."
+          Write-Host "Working directory: $PWD"
 
-      # 3️⃣ Setup Node.js
-      - name: Setup Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: '18'
+      - name: 🚀 Deploy from Nexus
+        shell: powershell
+        env:
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+          BUILD_VERSION: 20251022135017  # latest version from Nexus
+        run: |
+          Write-Host "[INFO] Starting deployment..."
+          
+          # Prepare Basic Auth
+          $base64Auth = [System.Convert]::ToBase64String(
+              [System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}")
+          )
+          $headers = @{ Authorization = "Basic $base64Auth" }
 
-      # 4️⃣ Install dependencies
-      - name: Install dependencies
-        run: npm install --prefix C:\JuiceShopServer
+          # === FRONTEND DEPLOYMENT ===
+          try {
+              $frontendUrl = "${env:NEXUS_URL}/com/example/juiceshop/frontend-build/$env:BUILD_VERSION/frontend-build-$env:BUILD_VERSION.zip"
+              Write-Host "[INFO] Downloading frontend from $frontendUrl ..."
+              Invoke-WebRequest -Uri $frontendUrl -OutFile "frontend.zip" -Headers $headers
 
-      # 5️⃣ Start Juice Shop server
-      - name: Start server
-        run: node C:\JuiceShopServer\app.js
+              if (Test-Path "${env:DEPLOY_PATH_FRONTEND}") {
+                  Write-Host "[INFO] Cleaning old frontend files..."
+                  Remove-Item -Recurse -Force "${env:DEPLOY_PATH_FRONTEND}"
+              }
+
+              Expand-Archive -Path "frontend.zip" -DestinationPath "${env:DEPLOY_PATH_FRONTEND}" -Force
+              Write-Host "[SUCCESS] Frontend deployed successfully."
+          } catch {
+              Write-Host "[ERROR] Failed to deploy frontend."
+              Write-Host $_.Exception.Message
+              exit 1
+          }
+
+          # === SERVER DEPLOYMENT ===
+          try {
+              $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/server-build/$env:BUILD_VERSION/server-build-$env:BUILD_VERSION.zip"
+              Write-Host "[INFO] Downloading server from $serverUrl ..."
+              Invoke-WebRequest -Uri $serverUrl -OutFile "server.zip" -Headers $headers
+
+              if (Test-Path "${env:DEPLOY_PATH_SERVER}") {
+                  Write-Host "[INFO] Cleaning old server files..."
+                  Remove-Item -Recurse -Force "${env:DEPLOY_PATH_SERVER}"
+              }
+
+              Expand-Archive -Path "server.zip" -DestinationPath "${env:DEPLOY_PATH_SERVER}" -Force
+              Write-Host "[SUCCESS] Server deployed successfully."
+
+              # Install backend dependencies
+              Write-Host "[INFO] Installing server dependencies..."
+              npm install --prefix "${env:DEPLOY_PATH_SERVER}"
+
+              # Start server
+              Write-Host "[INFO] Starting Juice Shop server..."
+              Start-Process -NoNewWindow -FilePath "node" -ArgumentList "${env:DEPLOY_PATH_SERVER}\app.js"
+          } catch {
+              Write-Host "[ERROR] Failed to deploy server."
+              Write-Host $_.Exception.Message
+              exit 1
+          }
+
+          Write-Host "✅ Deployment completed successfully!"
