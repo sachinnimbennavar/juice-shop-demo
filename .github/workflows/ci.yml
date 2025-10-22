@@ -1,79 +1,114 @@
-name: JuiceShop Build & Deploy (Self-Hosted + Loop-Safe)
+name: Juice Shop Deployment
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # Manual trigger only
 
 jobs:
-  build-and-deploy:
+  deploy:
     runs-on: self-hosted
 
     env:
-      DEPLOY_PATH: C:\JuiceShopServer
-      FRONTEND_ZIP_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo/com/example/juiceshop/frontend-build/20251022135017/frontend-build-20251022135017.zip
-      SERVER_ZIP_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo/com/example/juiceshop/server-build/20251022135017/server-build-20251022135017.zip
+      NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
+      DEPLOY_PATH_FRONTEND: C:\JuiceShopServer\frontend
+      DEPLOY_PATH_SERVER: C:\JuiceShopServer
 
     steps:
-      - name: Checkout repository
+      - name: 🧩 Checkout code
         uses: actions/checkout@v3
 
-      - name: Prepare Deployment Directory
+      - name: ⚙️ Setup PowerShell environment
+        shell: powershell
         run: |
-          Write-Host "[INFO] Creating deployment directory..."
-          if (-Not (Test-Path $env:DEPLOY_PATH)) {
-              New-Item -ItemType Directory -Path $env:DEPLOY_PATH
+          Write-Host "[INFO] Deployment job started..."
+          Write-Host "Working directory: $PWD"
+
+      - name: 🚀 Deploy from Nexus
+        shell: powershell
+        env:
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+          BUILD_VERSION: 20251022135017
+        run: |
+          Write-Host "[INFO] Starting deployment..."
+          
+          # Prepare Basic Auth
+          $base64Auth = [System.Convert]::ToBase64String(
+              [System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}")
+          )
+          $headers = @{ Authorization = "Basic $base64Auth" }
+
+          # === FRONTEND DEPLOYMENT ===
+          try {
+              $frontendUrl = "${env:NEXUS_URL}/com/example/juiceshop/frontend-build/$env:BUILD_VERSION/frontend-build-$env:BUILD_VERSION.zip"
+              Write-Host "[INFO] Downloading frontend from $frontendUrl ..."
+              Invoke-WebRequest -Uri $frontendUrl -OutFile "frontend.zip" -Headers $headers
+              if (Test-Path "frontend.zip") {
+                  Write-Host "[INFO] Extracting frontend to ${env:DEPLOY_PATH_FRONTEND} ..."
+                  Expand-Archive -Path "frontend.zip" -DestinationPath "${env:DEPLOY_PATH_FRONTEND}" -Force
+                  Write-Host "[SUCCESS] Frontend deployed successfully."
+              } else {
+                  Write-Host "[ERROR] Frontend ZIP not downloaded."
+                  exit 1
+              }
+          }
+          catch {
+              Write-Host "[ERROR] Failed to download frontend ZIP from Nexus."
+              Write-Host $_.Exception.Message
+              exit 1
           }
 
-      - name: Download Frontend Zip from Nexus
-        run: |
-          Write-Host "[INFO] Downloading frontend from Nexus..."
-          Invoke-WebRequest -Uri $env:FRONTEND_ZIP_URL -OutFile "$env:DEPLOY_PATH\frontend.zip"
+          # === SERVER DEPLOYMENT ===
+          try {
+              $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/server-build/$env:BUILD_VERSION/server-build-$env:BUILD_VERSION.zip"
+              Write-Host "[INFO] Downloading server from $serverUrl ..."
+              Invoke-WebRequest -Uri $serverUrl -OutFile "server.zip" -Headers $headers
+              if (Test-Path "server.zip") {
+                  Write-Host "[INFO] Extracting server to ${env:DEPLOY_PATH_SERVER} ..."
+                  Expand-Archive -Path "server.zip" -DestinationPath "${env:DEPLOY_PATH_SERVER}" -Force
+                  Write-Host "[SUCCESS] Server deployed successfully."
+              } else {
+                  Write-Host "[ERROR] Server ZIP not downloaded."
+                  exit 1
+              }
+          }
+          catch {
+              Write-Host "[ERROR] Failed to download server ZIP from Nexus."
+              Write-Host $_.Exception.Message
+              exit 1
+          }
 
-      - name: Extract Frontend
-        run: |
-          Write-Host "[INFO] Extracting frontend..."
-          Expand-Archive -Path "$env:DEPLOY_PATH\frontend.zip" -DestinationPath "$env:DEPLOY_PATH\frontend" -Force
+          Write-Host "✅ Deployment completed successfully!"
 
-      - name: Download Server Zip from Nexus
+      - name: ⚡ Install & Build Application
+        shell: powershell
         run: |
-          Write-Host "[INFO] Downloading server from Nexus..."
-          Invoke-WebRequest -Uri $env:SERVER_ZIP_URL -OutFile "$env:DEPLOY_PATH\server.zip"
-
-      - name: Extract Server
-        run: |
-          Write-Host "[INFO] Extracting server..."
-          Expand-Archive -Path "$env:DEPLOY_PATH\server.zip" -DestinationPath "$env:DEPLOY_PATH\server" -Force
-
-      - name: Install Backend Dependencies
-        run: |
+          # === BACKEND DEPENDENCIES ===
           Write-Host "[INFO] Installing backend dependencies..."
-          cd $env:DEPLOY_PATH\server
+          cd "${env:DEPLOY_PATH_SERVER}"
           npm install
 
-      - name: Install Frontend Dependencies (Loop-Safe)
-        run: |
+          # === FRONTEND DEPENDENCIES (loop-safe) ===
           Write-Host "[INFO] Installing frontend dependencies..."
-          cd $env:DEPLOY_PATH\frontend
+          cd "${env:DEPLOY_PATH_FRONTEND}"
           npm install --legacy-peer-deps --ignore-scripts
 
-      - name: Build Frontend
-        run: |
+          # === BUILD FRONTEND ===
           Write-Host "[INFO] Building frontend..."
-          cd $env:DEPLOY_PATH\frontend
+          cd "${env:DEPLOY_PATH_FRONTEND}"
           npm run build
 
-      - name: Build Server
-        run: |
+          # === BUILD SERVER ===
           Write-Host "[INFO] Building server..."
-          cd $env:DEPLOY_PATH\server
+          cd "${env:DEPLOY_PATH_SERVER}"
           npm run build:server
 
-      - name: Start Juice Shop Server
+          Write-Host "[SUCCESS] Application built successfully."
+
+      - name: 🚀 Start Juice Shop Server
+        shell: powershell
         run: |
           Write-Host "[INFO] Starting Juice Shop server..."
-          cd $env:DEPLOY_PATH\server
+          cd "${env:DEPLOY_PATH_SERVER}"
+          # Start server in background
           Start-Process -NoNewWindow -FilePath "node" -ArgumentList "app.ts"
-          Write-Host "[SUCCESS] Server started. Juice Shop should now be running."
-
-      - name: Deployment Complete
-        run: |
-          Write-Host "[SUCCESS] Frontend and backend build complete. Server is running."
+          Write-Host "[SUCCESS] Juice Shop server started."
