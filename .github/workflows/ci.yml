@@ -1,61 +1,65 @@
-name: Juice Shop Upload Only
+name: Juice Shop CI - Upload Only
 
 on:
   workflow_dispatch: # manual trigger
 
 jobs:
-  upload-only:
+  package-and-upload:
     runs-on: self-hosted
-    steps:
-      # 1️⃣ Download the latest build artifact
-      - name: Download build artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: juice-shop-build
-          path: frontend-build/
 
-      # 2️⃣ Upload the zip to Nexus
-      - name: Upload build zip to Nexus
+    steps:
+      # 1️⃣ Checkout code (needed to access source files)
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # 2️⃣ Package & upload everything to Nexus
+      - name: Package and upload build artifacts to Nexus
         shell: powershell
         env:
-          NEXUS_URL: ${{ secrets.NEXUS_URL }}
+          NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
-          # Find the latest folder inside frontend-build
-          $latestFolder = Get-ChildItem "frontend-build" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          Write-Host "Packaging and uploading build artifacts..."
 
-          if (!$latestFolder) {
-              Write-Host "No build folders found in frontend-build"
-              exit 1
-          }
-
-          # Find the zip
-          $zipFile = Get-ChildItem "$($latestFolder.FullName)" -Filter *.zip | Select-Object -First 1
-          if (!$zipFile) {
-              Write-Host "No zip file found in $($latestFolder.FullName)"
-              exit 1
-          }
-
-          Write-Host "Found build zip: $($zipFile.FullName)"
-
-          # Generate SHA256 checksum
-          $checksumFile = Join-Path $latestFolder.FullName "$($zipFile.BaseName).sha256"
-          $checksum = Get-FileHash -Path $zipFile.FullName -Algorithm SHA256
-          $checksum.Value | Out-File -FilePath $checksumFile
-          Write-Host "SHA256 checksum created: $checksumFile"
-
-          # Upload to Nexus
+          $timestamp = Get-Date -Format "yyyyMMddHHmmss"
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
 
-          $timestamp = ($zipFile.BaseName -split "-")[-1]
-          $nexusBasePath = "${env:NEXUS_URL}/repository/juice-shop/com/example/juiceshop/frontend-build/$timestamp"
+          # Create temp folders for packaging
+          $tempFolder = "temp_artifacts_$timestamp"
+          New-Item -ItemType Directory -Force -Path $tempFolder | Out-Null
 
-          Write-Host "Uploading zip to Nexus..."
-          Invoke-RestMethod -Uri "$nexusBasePath/$($zipFile.Name)" -Method Put -InFile $zipFile.FullName -Headers $headers
+          # Copy everything except node_modules and .git
+          $exclude = @("node_modules", ".git")
+          Get-ChildItem -Recurse -Force | Where-Object { $exclude -notcontains $_.Name } | ForEach-Object {
+              $dest = Join-Path $tempFolder $_.FullName.Substring((Get-Location).Path.Length + 1)
+              if ($_.PSIsContainer) {
+                  New-Item -ItemType Directory -Force -Path $dest | Out-Null
+              } else {
+                  $parentDir = Split-Path $dest
+                  if (!(Test-Path $parentDir)) { New-Item -ItemType Directory -Force -Path $parentDir | Out-Null }
+                  Copy-Item $_.FullName -Destination $dest -Force
+              }
+          }
 
-          Write-Host "Uploading checksum..."
-          Invoke-RestMethod -Uri "$nexusBasePath/$($zipFile.BaseName).sha256" -Method Put -InFile $checksumFile -Headers $headers
+          # Compress the full repository
+          $fullZip = "juice-shop-full-$timestamp.zip"
+          Compress-Archive -Path "$tempFolder/*" -DestinationPath $fullZip -Force
 
-          Write-Host "Nexus upload completed successfully."
+          # Generate SHA256 checksum
+          $checksumFile = "$($fullZip -replace '.zip','.sha256')"
+          $checksum = Get-FileHash -Path $fullZip -Algorithm SHA256
+          $checksum.Value | Out-File -FilePath $checksumFile
+
+          # Upload ZIP
+          $nexusZipUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-build/$timestamp/$fullZip"
+          Write-Host "Uploading ZIP to Nexus → $nexusZipUrl"
+          Invoke-RestMethod -Uri $nexusZipUrl -Method Put -InFile $fullZip -Headers $headers
+
+          # Upload checksum
+          $nexusChecksumUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-build/$timestamp/$($fullZip -replace '.zip','.sha256')"
+          Write-Host "Uploading checksum → $nexusChecksumUrl"
+          Invoke-RestMethod -Uri $nexusChecksumUrl -Method Put -InFile $checksumFile -Headers $headers
+
+          Write-Host "✅ Full repository packaged and uploaded successfully."
