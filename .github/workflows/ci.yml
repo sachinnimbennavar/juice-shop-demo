@@ -13,7 +13,7 @@ jobs:
         uses: actions/checkout@v3
 
       # 2️⃣ Package & Upload frontend and server builds
-      - name: Package and Upload to Maven Repo
+      - name: Build (if missing) and Upload to Maven Repo
         shell: powershell
         env:
           NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
@@ -29,7 +29,15 @@ jobs:
           # --------------------------
           $frontendSource = "frontend/dist"
           if (!(Test-Path $frontendSource)) {
-              Write-Host "❌ Frontend build not found at $frontendSource. Cannot continue."
+              Write-Host "⚠️ Frontend build not found. Building frontend now..."
+              cd frontend
+              npm install --legacy-peer-deps --prefer-offline --no-audit
+              npm run build -- --configuration production --watch=false --verbose
+              cd ..
+          }
+
+          if (!(Test-Path $frontendSource)) {
+              Write-Host "❌ Frontend build failed. Cannot continue."
               exit 1
           }
 
