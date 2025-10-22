@@ -31,12 +31,12 @@ jobs:
           $tempFolder = "temp_artifacts_$timestamp"
           New-Item -ItemType Directory -Force -Path $tempFolder | Out-Null
 
-          # Copy all files excluding node_modules and .git
-          $exclude = @("node_modules", ".git")
+          # Copy all files except node_modules, .git, and the temp folder itself
+          $exclude = @("node_modules", ".git", $tempFolder)
           Get-ChildItem -Recurse -File -Force | Where-Object {
-              ($exclude -notcontains $_.Name) -and ($_.FullName -notmatch '\\node_modules\\|\\.git\\')
+              ($exclude -notcontains $_.Name) -and ($_.FullName -notmatch '\\node_modules\\|\\.git\\|'+[regex]::Escape($tempFolder)+'\\')
           } | ForEach-Object {
-              # Calculate relative path correctly
+              # Relative path
               $relativePath = $_.FullName.Substring($repoRoot.Length + 1)
               $dest = Join-Path $tempFolder $relativePath
 
@@ -44,7 +44,7 @@ jobs:
               $parentDir = Split-Path $dest
               if (!(Test-Path $parentDir)) { New-Item -ItemType Directory -Force -Path $parentDir | Out-Null }
 
-              # Copy the file
+              # Copy file
               Copy-Item $_.FullName -Destination $dest -Force
           }
 
