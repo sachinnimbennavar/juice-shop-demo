@@ -1,11 +1,11 @@
-name: JuiceShop Build & Deploy (Loop-Safe + Auto-Start)
+name: JuiceShop Build & Deploy (Self-Hosted + Loop-Safe)
 
 on:
   workflow_dispatch:
 
 jobs:
   build-and-deploy:
-    runs-on: windows-latest
+    runs-on: self-hosted
 
     env:
       DEPLOY_PATH: C:\JuiceShopServer
