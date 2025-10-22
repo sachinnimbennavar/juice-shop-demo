@@ -1,129 +1,58 @@
-name: Juice Shop CI
+name: Juice Shop Upload Only
 
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
-  workflow_dispatch: # allow manual trigger
+  workflow_dispatch:
     inputs:
-      reason:
-        description: "Reason for manual trigger"
-        required: false
+      build_folder:
+        description: "Folder of existing build (frontend-build/<timestamp>)"
+        required: true
 
 jobs:
-  build:
+  upload-only:
     runs-on: self-hosted
-
     steps:
-      # 1️⃣ Checkout the repository
+      # 1️⃣ Checkout repository (needed for path structure)
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2️⃣ Set Node memory for server build
-      - name: Set Node memory
-        run: set NODE_OPTIONS=--max_old_space_size=4096
-
-      # 3️⃣ Cache frontend dependencies and Angular build output
-      - name: Cache frontend
-        uses: actions/cache@v3
-        with:
-          path: |
-            frontend/node_modules
-            frontend/dist
-            frontend/.angular
-          key: ${{ runner.os }}-frontend-${{ hashFiles('frontend/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-frontend-
-
-      # 4️⃣ Cache server dependencies
-      - name: Cache server
-        uses: actions/cache@v3
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-server-${{ hashFiles('package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-server-
-
-      # 5️⃣ Install frontend dependencies
-      - name: Install frontend dependencies
-        run: |
-          cd frontend
-          npm install --legacy-peer-deps --prefer-offline --no-audit
-          cd ..
-
-      # 6️⃣ Build frontend (Angular incremental build handled automatically)
-      - name: Build frontend
-        run: |
-          cd frontend
-          npm run build -- --configuration production --watch=false --verbose
-          cd ..
-
-      # 7️⃣ Install server dependencies
-      - name: Install server dependencies
-        run: npm install --prefer-offline --no-audit
-
-      # 8️⃣ Build server
-      - name: Build server
-        run: npm run build:server
-
-      # 9️⃣ Optional SonarQube analysis (safe skip if not installed)
-      - name: SonarQube Scan
-        run: |
-          if (Get-Command sonar-scanner -ErrorAction SilentlyContinue) {
-              echo "Running SonarQube scanner..."
-              set SONAR_HOST_URL=http://127.0.0.1:9000
-              sonar-scanner
-          } else {
-              echo "sonar-scanner not found, skipping SonarQube analysis."
-          }
-
-      # 🔟 Package and Upload Full Repository
-      - name: Package and Upload Repo to Nexus
+      # 2️⃣ Upload existing build to Nexus
+      - name: Upload build zip to Nexus
         shell: powershell
         env:
           NEXUS_URL: ${{ secrets.NEXUS_URL }}
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
-          Write-Host "🧩 Preparing full repository zip (excluding node_modules)..."
+          $buildFolder = "${{ github.event.inputs.build_folder }}"
+          Write-Host "📁 Using existing build folder: $buildFolder"
 
-          $timestamp = Get-Date -Format "yyyyMMddHHmmss"
-          $buildFolder = "frontend-build/$timestamp"
-          New-Item -ItemType Directory -Force -Path $buildFolder | Out-Null
-
-          $tempFolder = "temp_artifacts"
-          if (Test-Path $tempFolder) { Remove-Item $tempFolder -Recurse -Force }
-          New-Item -ItemType Directory -Force -Path $tempFolder | Out-Null
-
-          Write-Host "📁 Copying all repo files except node_modules and .git..."
-          robocopy . $tempFolder /E /XD node_modules .git /NFL /NDL /NJH /NJS /NC /NS
-          if ($LASTEXITCODE -lt 8) {
-              Write-Host "✅ Files copied successfully."
-          } else {
-              Write-Host "❌ robocopy failed with exit code $LASTEXITCODE"
+          if (!(Test-Path $buildFolder)) {
+              Write-Host "❌ Folder not found: $buildFolder"
               exit 1
           }
 
-          $zipFileName = "frontend-build-$timestamp.zip"
-          $zipPath = Join-Path $buildFolder $zipFileName
+          # Find the zip
+          $zipFile = Get-ChildItem "$buildFolder" -Filter *.zip | Select-Object -First 1
+          if (!$zipFile) {
+              Write-Host "❌ No zip file found in $buildFolder"
+              exit 1
+          }
 
-          Write-Host "📦 Compressing all files to $zipPath ..."
-          Compress-Archive -Path "$tempFolder/*" -DestinationPath $zipPath -Force
-          Write-Host "✅ Repository zipped successfully."
+          # Generate SHA256 checksum
+          $checksumFile = Join-Path $buildFolder "$($zipFile.BaseName).sha256"
+          $checksum = Get-FileHash -Path $zipFile.FullName -Algorithm SHA256
+          $checksum.Value | Out-File -FilePath $checksumFile
+          Write-Host "🔐 SHA256 checksum created: $checksumFile"
 
-          # Optional checksum (SHA256)
-          $checksum = Get-FileHash -Path $zipPath -Algorithm SHA256
-          $checksum.Value | Out-File -FilePath (Join-Path $buildFolder "frontend-build-$timestamp.sha256")
-
-          Write-Host "⬆️ Uploading zip to Nexus..."
+          # Upload zip and checksum to Nexus
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
 
-          $nexusTarget = "${env:NEXUS_URL}/repository/juice-shop/com/example/juiceshop/frontend-build/$timestamp/$zipFileName"
-          Invoke-RestMethod -Uri $nexusTarget -Method Put -InFile $zipPath -Headers $headers
+          $nexusBasePath = "${env:NEXUS_URL}/repository/juice-shop/com/example/juiceshop/frontend-build/$($zipFile.BaseName.Split('-')[-1])"
+          Write-Host "⬆️ Uploading $($zipFile.Name) to Nexus..."
+          Invoke-RestMethod -Uri "$nexusBasePath/$($zipFile.Name)" -Method Put -InFile $zipFile.FullName -Headers $headers
+
+          Write-Host "⬆️ Uploading checksum..."
+          Invoke-RestMethod -Uri "$nexusBasePath/$($zipFile.BaseName).sha256" -Method Put -InFile $checksumFile -Headers $headers
 
           Write-Host "✅ Nexus upload completed successfully."
-          Remove-Item $tempFolder -Recurse -Force
