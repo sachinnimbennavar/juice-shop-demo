@@ -27,24 +27,25 @@ jobs:
           $headers = @{ Authorization = "Basic $base64Auth" }
 
           # Repo root and temp folder
-          $repoRoot = Get-Location
+          $repoRoot = (Get-Location).ProviderPath
           $tempFolder = "temp_artifacts_$timestamp"
           New-Item -ItemType Directory -Force -Path $tempFolder | Out-Null
 
-          # Copy everything except node_modules and .git
+          # Copy all files excluding node_modules and .git
           $exclude = @("node_modules", ".git")
-          Get-ChildItem -Recurse -Force | Where-Object { $exclude -notcontains $_.Name } | ForEach-Object {
-              # Calculate path relative to repo root
-              $relativePath = $_.FullName.Substring($repoRoot.Path.Length + 1)
+          Get-ChildItem -Recurse -File -Force | Where-Object {
+              ($exclude -notcontains $_.Name) -and ($_.FullName -notmatch '\\node_modules\\|\\.git\\')
+          } | ForEach-Object {
+              # Calculate relative path correctly
+              $relativePath = $_.FullName.Substring($repoRoot.Length + 1)
               $dest = Join-Path $tempFolder $relativePath
 
-              if ($_.PSIsContainer) {
-                  if (!(Test-Path $dest)) { New-Item -ItemType Directory -Force -Path $dest | Out-Null }
-              } else {
-                  $parentDir = Split-Path $dest
-                  if (!(Test-Path $parentDir)) { New-Item -ItemType Directory -Force -Path $parentDir | Out-Null }
-                  Copy-Item $_.FullName -Destination $dest -Force
-              }
+              # Ensure parent folder exists
+              $parentDir = Split-Path $dest
+              if (!(Test-Path $parentDir)) { New-Item -ItemType Directory -Force -Path $parentDir | Out-Null }
+
+              # Copy the file
+              Copy-Item $_.FullName -Destination $dest -Force
           }
 
           # Compress the full repository
