@@ -1,71 +1,43 @@
-name: Juice Shop Maven Upload - Full Repo
+name: CD Pipeline
 
 on:
   workflow_dispatch:
 
 jobs:
-  upload-only:
-    runs-on: self-hosted
+  deploy:
+    runs-on: windows-latest
 
     steps:
-      # 1️⃣ Checkout repository
-      - name: Checkout repository
-        uses: actions/checkout@v3
-
-      # 2️⃣ Package & Upload frontend and server builds
-      - name: Build (if missing) and Upload to Maven Repo
-        shell: powershell
-        env:
-          NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
-          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
-          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+      - name: Set variables
         run: |
-          $version = (Get-Date -Format "yyyyMMddHHmmss")
-          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
-          $headers = @{ Authorization = "Basic $base64Auth" }
+          $basePath = "C:\JuiceShopServer"
+          $frontendZip = "$basePath\frontend.zip"
+          $serverZip = "$basePath\server.zip"
+          $frontendUrl = "http://127.0.0.1:8081/repository/JuiceShopMavenDemo/com/example/juiceshop/frontend-build/latest/frontend-build-latest.zip"
+          $serverUrl = "http://127.0.0.1:8081/repository/JuiceShopMavenDemo/com/example/juiceshop/server-build/latest/server-build-latest.zip"
 
-          # --------------------------
-          # FRONTEND
-          # --------------------------
-          $frontendSource = "frontend/dist"
-          if (!(Test-Path $frontendSource)) {
-              Write-Host "⚠️ Frontend build not found. Building frontend now..."
-              cd frontend
-              npm install --legacy-peer-deps --prefer-offline --no-audit
-              npm run build -- --configuration production --watch=false --verbose
-              cd ..
-          }
+      - name: Create deployment folder
+        run: New-Item -ItemType Directory -Force -Path "C:\JuiceShopServer"
 
-          if (!(Test-Path $frontendSource)) {
-              Write-Host "❌ Frontend build failed. Cannot continue."
-              exit 1
-          }
+      - name: Download frontend
+        run: Invoke-WebRequest -Uri $frontendUrl -OutFile "C:\JuiceShopServer\frontend.zip"
 
-          $frontendZip = "frontend-build-$version.zip"
-          Compress-Archive -Path "$frontendSource/*" -DestinationPath $frontendZip -Force
-          $frontendUrl = "${env:NEXUS_URL}/com/example/juiceshop/frontend-build/$version/$frontendZip"
-          Write-Host "⬆️ Uploading frontend ZIP → $frontendUrl"
-          Invoke-RestMethod -Uri $frontendUrl -Method Put -InFile $frontendZip -Headers $headers -ContentType "application/zip"
-          Write-Host "✅ Frontend uploaded successfully."
+      - name: Download server
+        run: Invoke-WebRequest -Uri $serverUrl -OutFile "C:\JuiceShopServer\server.zip"
 
-          # --------------------------
-          # SERVER (source + build)
-          # --------------------------
-          $serverPaths = @(
-              "app.ts","server.ts","package.json","tsconfig.json",
-              "models","routes","lib","data","views","rsn","config","build"
-          ) | Where-Object { Test-Path $_ }
+      - name: Extract zips
+        run: |
+          Expand-Archive -Path "C:\JuiceShopServer\frontend.zip" -DestinationPath "C:\JuiceShopServer" -Force
+          Expand-Archive -Path "C:\JuiceShopServer\server.zip" -DestinationPath "C:\JuiceShopServer" -Force
 
-          if ($serverPaths.Count -eq 0) {
-              Write-Host "❌ No server files found. Cannot continue."
-              exit 1
-          }
+      - name: Install dependencies
+        run: |
+          cd C:\JuiceShopServer\server
+          npm install
+          cd C:\JuiceShopServer\frontend\frontend
+          npm install
 
-          $serverZip = "server-build-$version.zip"
-          Compress-Archive -Path $serverPaths -DestinationPath $serverZip -Force
-          $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/server-build/$version/$serverZip"
-          Write-Host "⬆️ Uploading server ZIP → $serverUrl"
-          Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $serverZip -Headers $headers -ContentType "application/zip"
-          Write-Host "✅ Server uploaded successfully."
-
-          Write-Host "🎉 All mandatory builds uploaded successfully!"
+      - name: Start applications
+        run: |
+          Start-Process powershell -ArgumentList "cd C:\JuiceShopServer\server; npm start" -WindowStyle Hidden
+          Start-Process powershell -ArgumentList "cd C:\JuiceShopServer\frontend\frontend; npm start" -WindowStyle Hidden
