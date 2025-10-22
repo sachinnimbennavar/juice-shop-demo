@@ -1,46 +1,49 @@
 name: Juice Shop Upload Only
 
 on:
-  workflow_dispatch: # manual trigger, no input needed
+  workflow_dispatch: # manual trigger
 
 jobs:
   upload-only:
     runs-on: self-hosted
     steps:
-      # 1️⃣ Checkout repository (needed for folder structure)
-      - name: Checkout repository
-        uses: actions/checkout@v3
+      # 1️⃣ Download the latest build artifact
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: juice-shop-build
+          path: frontend-build/
 
-      # 2️⃣ Upload latest build zip to Nexus
-      - name: Upload latest build zip to Nexus
+      # 2️⃣ Upload the zip to Nexus
+      - name: Upload build zip to Nexus
         shell: powershell
         env:
           NEXUS_URL: ${{ secrets.NEXUS_URL }}
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
-          # Find the latest build folder
-          $buildRoot = "frontend-build"
-          $latestFolder = Get-ChildItem $buildRoot | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-          
+          # Find the latest folder inside frontend-build
+          $latestFolder = Get-ChildItem "frontend-build" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+
           if (!$latestFolder) {
-              Write-Host "❌ No build folders found in $buildRoot"
+              Write-Host "No build folders found in frontend-build"
               exit 1
           }
 
+          # Find the zip
           $zipFile = Get-ChildItem "$($latestFolder.FullName)" -Filter *.zip | Select-Object -First 1
           if (!$zipFile) {
-              Write-Host "❌ No zip file found in $($latestFolder.FullName)"
+              Write-Host "No zip file found in $($latestFolder.FullName)"
               exit 1
           }
 
-          Write-Host "📁 Found latest build zip: $($zipFile.FullName)"
+          Write-Host "Found build zip: $($zipFile.FullName)"
 
           # Generate SHA256 checksum
           $checksumFile = Join-Path $latestFolder.FullName "$($zipFile.BaseName).sha256"
           $checksum = Get-FileHash -Path $zipFile.FullName -Algorithm SHA256
           $checksum.Value | Out-File -FilePath $checksumFile
-          Write-Host "🔐 SHA256 checksum created: $checksumFile"
+          Write-Host "SHA256 checksum created: $checksumFile"
 
           # Upload to Nexus
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
@@ -49,10 +52,10 @@ jobs:
           $timestamp = ($zipFile.BaseName -split "-")[-1]
           $nexusBasePath = "${env:NEXUS_URL}/repository/juice-shop/com/example/juiceshop/frontend-build/$timestamp"
 
-          Write-Host "⬆️ Uploading zip to Nexus..."
+          Write-Host "Uploading zip to Nexus..."
           Invoke-RestMethod -Uri "$nexusBasePath/$($zipFile.Name)" -Method Put -InFile $zipFile.FullName -Headers $headers
 
-          Write-Host "⬆️ Uploading checksum..."
+          Write-Host "Uploading checksum..."
           Invoke-RestMethod -Uri "$nexusBasePath/$($zipFile.BaseName).sha256" -Method Put -InFile $checksumFile -Headers $headers
 
-          Write-Host "✅ Nexus upload completed successfully."
+          Write-Host "Nexus upload completed successfully."
