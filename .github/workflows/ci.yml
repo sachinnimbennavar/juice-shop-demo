@@ -12,19 +12,53 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2️⃣ Install dependencies and build project
-      - name: Install dependencies and build project
+      # 2️⃣ Install dependencies for backend and frontend
+      - name: Install backend dependencies
         shell: powershell
         run: |
-          Write-Host "[INFO] Installing dependencies..."
-          npm install --legacy-peer-deps
-          if (Test-Path "package.json") {
-            Write-Host "[INFO] Running build (if defined)..."
-            npm run build --if-present
-          }
-          Write-Host "[INFO] Build step complete."
+          Write-Host "Installing backend dependencies..."
+          npm install
 
-      # 3️⃣ Create full repo ZIP preserving order
+      - name: Install frontend dependencies
+        shell: powershell
+        run: |
+          Write-Host "Installing frontend dependencies..."
+          cd frontend
+          npm install
+          cd ..
+
+      # 3️⃣ Build backend and frontend
+      - name: Build backend and frontend
+        shell: powershell
+        run: |
+          Write-Host "Building backend..."
+          # Add backend build commands if any
+          Write-Host "Building frontend..."
+          cd frontend
+          npm run build
+          cd ..
+
+      # 4️⃣ Ensure logs folder exists (optional)
+      - name: Ensure logs folder exists
+        shell: powershell
+        run: |
+          if (-not (Test-Path "logs")) { New-Item -ItemType Directory -Path "logs" }
+
+      # 5️⃣ Validate essential folders
+      - name: Validate essential folders
+        shell: powershell
+        run: |
+          $essentialFolders = @("build", "node_modules", "logs")
+          foreach ($folder in $essentialFolders) {
+              if (-not (Test-Path $folder)) {
+                  Write-Error "❌ Required folder '$folder' is missing! Pipeline will stop."
+                  exit 1
+              } else {
+                  Write-Host "✅ Verified folder present: $folder"
+              }
+          }
+
+      # 6️⃣ Create full repo ZIP preserving folder/file order
       - name: Create full repo ZIP
         shell: powershell
         env:
@@ -37,30 +71,18 @@ jobs:
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
 
-          Write-Host "[INFO] Preparing ZIP file $serverZip ..."
-
-          # Folder and file order (includes build, logs, node_modules explicitly)
           $itemsInOrder = @(
               ".dependabot",".github",".gitlab",".well-known",".zap",
-              "build","config","data","encryptionkeys","frontend","ftp","i18n",
-              "lib","logs","models","monitoring","node_modules","routes","rsn",
-              "screenshots","test","uploads","vagrant","views",
-              ".codeclimate.yml",".devcontainer.json",".dockerignore",".eslintrc.js",".gitignore",
-              ".gitlab-ci.yml",".gitpod.yml",".mailmap",".npmrc",
-              "app.json","app.ts","CODE_OF_CONDUCT.md","config.schema.yml","CONTRIBUTING.md","crowdin.yaml",
-              "ctf.key","cypress.config.ts","docker-compose.test.yml","Dockerfile","Gruntfile.js",
-              "HALL_OF_FAME.md","LICENSE","package.json","README.md","REFERENCES.md","SECURITY.md",
-              "server.ts","SOLUTIONS.md","swagger.yml","threat-model.json","tsconfig.json"
+              "build","config","data","encryptionkeys",
+              "frontend","ftp","i18n","lib","logs","models","monitoring","node_modules",
+              "routes","rsn","screenshots","test","uploads","vagrant","views",
+              ".codeclimate.yml",".devcontainer.json",".dockerignore",".eslintrc.js",
+              ".gitignore",".gitlab-ci.yml",".gitpod.yml",".mailmap",".npmrc",
+              "app.json","app.ts","CODE_OF_CONDUCT.md","config.schema.yml","CONTRIBUTING.md",
+              "crowdin.yaml","ctf.key","cypress.config.ts","docker-compose.test.yml","Dockerfile",
+              "Gruntfile.js","HALL_OF_FAME.md","LICENSE","package.json","README.md","REFERENCES.md",
+              "SECURITY.md","server.ts","SOLUTIONS.md","swagger.yml","threat-model.json","tsconfig.json"
           )
-
-          # Ensure critical folders exist
-          foreach ($folder in @("build","logs","node_modules")) {
-            if (Test-Path $folder) {
-              Write-Host "[INFO] Verified folder present: $folder"
-            } else {
-              Write-Host "[WARNING] Folder missing: $folder"
-            }
-          }
 
           # Keep only existing items
           $itemsToZip = $itemsInOrder | Where-Object { Test-Path $_ }
@@ -68,7 +90,7 @@ jobs:
           # Remove old ZIP if exists
           if (Test-Path $serverZip) { Remove-Item $serverZip -Force }
 
-          # Add items sequentially to ZIP
+          # Add items sequentially to ZIP to preserve order
           foreach ($item in $itemsToZip) {
               Write-Host "Adding $item to ZIP..."
               Compress-Archive -Path $item -Update -DestinationPath $serverZip
@@ -76,7 +98,7 @@ jobs:
 
           Write-Host "✅ Full repo ZIP created: $serverZip"
 
-          # 4️⃣ Upload ZIP to Nexus
+          # 7️⃣ Upload ZIP to Nexus
           $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/$version/$serverZip"
           Write-Host "⬆️ Uploading to Nexus → $serverUrl"
           Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $serverZip -Headers $headers -ContentType "application/zip"
