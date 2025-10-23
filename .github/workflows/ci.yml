@@ -1,4 +1,4 @@
-name: Juice Shop Full Repo Upload (with build + node_modules + logs)
+name: Juice Shop Full Repo Upload
 
 on:
   workflow_dispatch:
@@ -8,37 +8,24 @@ jobs:
     runs-on: self-hosted
 
     steps:
-      # 1️⃣ Checkout repo
+      # 1️⃣ Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2️⃣ Install dependencies
-      - name: Install dependencies
+      # 2️⃣ Install dependencies and build project
+      - name: Install dependencies and build project
         shell: powershell
         run: |
+          Write-Host "[INFO] Installing dependencies..."
+          npm install --legacy-peer-deps
           if (Test-Path "package.json") {
-            Write-Host "📦 Installing Node.js dependencies..."
-            npm install --legacy-peer-deps --prefer-offline --no-audit
-          } else {
-            Write-Host "⚠️ package.json not found — skipping npm install."
+            Write-Host "[INFO] Running build (if defined)..."
+            npm run build --if-present
           }
+          Write-Host "[INFO] Build step complete."
 
-      # 3️⃣ Build project (only if build script exists)
-      - name: Build project
-        shell: powershell
-        run: |
-          if (Test-Path "package.json") {
-            $pkg = Get-Content package.json | ConvertFrom-Json
-            if ($pkg.scripts.build) {
-              Write-Host "🏗️ Running build..."
-              npm run build --if-present
-            } else {
-              Write-Host "ℹ️ No build script defined — skipping build."
-            }
-          }
-
-      # 4️⃣ Create and upload ZIP preserving order
-      - name: Create full repo ZIP and upload to Nexus
+      # 3️⃣ Create full repo ZIP preserving order
+      - name: Create full repo ZIP
         shell: powershell
         env:
           NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
@@ -50,10 +37,13 @@ jobs:
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
 
-          # Desired order (includes node_modules, build, logs)
+          Write-Host "[INFO] Preparing ZIP file $serverZip ..."
+
+          # Folder and file order (includes build, logs, node_modules explicitly)
           $itemsInOrder = @(
-              ".dependabot",".github",".gitlab",".well-known",".zap","build","config","data","encryptionkeys",
-              "frontend","ftp","i18n","lib","logs","models","monitoring","node_modules","routes","rsn",
+              ".dependabot",".github",".gitlab",".well-known",".zap",
+              "build","config","data","encryptionkeys","frontend","ftp","i18n",
+              "lib","logs","models","monitoring","node_modules","routes","rsn",
               "screenshots","test","uploads","vagrant","views",
               ".codeclimate.yml",".devcontainer.json",".dockerignore",".eslintrc.js",".gitignore",
               ".gitlab-ci.yml",".gitpod.yml",".mailmap",".npmrc",
@@ -63,29 +53,31 @@ jobs:
               "server.ts","SOLUTIONS.md","swagger.yml","threat-model.json","tsconfig.json"
           )
 
+          # Ensure critical folders exist
+          foreach ($folder in @("build","logs","node_modules")) {
+            if (Test-Path $folder) {
+              Write-Host "[INFO] Verified folder present: $folder"
+            } else {
+              Write-Host "[WARNING] Folder missing: $folder"
+            }
+          }
+
           # Keep only existing items
           $itemsToZip = $itemsInOrder | Where-Object { Test-Path $_ }
 
-          # Clean old zip if exists
+          # Remove old ZIP if exists
           if (Test-Path $serverZip) { Remove-Item $serverZip -Force }
 
-          # Create archive sequentially (preserves order)
+          # Add items sequentially to ZIP
           foreach ($item in $itemsToZip) {
-              Write-Host "📁 Adding $item..."
+              Write-Host "Adding $item to ZIP..."
               Compress-Archive -Path $item -Update -DestinationPath $serverZip
           }
 
-          # Double-check critical folders
-          foreach ($critical in @("build","logs","node_modules")) {
-              if (!(Test-Path $critical)) {
-                  Write-Host "⚠️ WARNING: '$critical' folder missing — zip may be incomplete!"
-              }
-          }
+          Write-Host "✅ Full repo ZIP created: $serverZip"
 
-          Write-Host "✅ ZIP ready: $serverZip"
-
-          # Upload to Nexus
-          $uploadUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/$version/$serverZip"
-          Write-Host "⬆️ Uploading to Nexus → $uploadUrl"
-          Invoke-RestMethod -Uri $uploadUrl -Method Put -InFile $serverZip -Headers $headers -ContentType "application/zip"
-          Write-Host "🎉 Successfully uploaded full repo (with build, logs, node_modules)."
+          # 4️⃣ Upload ZIP to Nexus
+          $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/$version/$serverZip"
+          Write-Host "⬆️ Uploading to Nexus → $serverUrl"
+          Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $serverZip -Headers $headers -ContentType "application/zip"
+          Write-Host "✅ Full repo uploaded successfully."
