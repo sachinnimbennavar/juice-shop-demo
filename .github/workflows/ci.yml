@@ -25,26 +25,26 @@ jobs:
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
 
-          # Exact folder/file order from your local repo
+          # Full repo structure in correct order
           $itemsInOrder = @(
-              ".dependabot",".github",".gitlab",".well-known",".zap","build","config","data","encryptionkeys",
-              "frontend","ftp","i18n","lib","logs","models","monitoring","node_modules","routes","rsn",
-              "screenshots","test","uploads","vagrant","views",
-              ".codeclimate.yml",".devcontainer.json",".dockerignore",".eslintrc.js",".gitignore",
-              ".gitlab-ci.yml",".gitpod.yml",".mailmap",".npmrc",
-              "app.json","app.ts","CODE_OF_CONDUCT.md","config.schema.yml","CONTRIBUTING.md","crowdin.yaml",
-              "ctf.key","cypress.config.ts","docker-compose.test.yml","Dockerfile","Gruntfile.js",
-              "HALL_OF_FAME.md","LICENSE","package.json","README.md","REFERENCES.md","SECURITY.md",
-              "server.ts","SOLUTIONS.md","swagger.yml","threat-model.json","tsconfig.json"
+              ".dependabot",".github",".gitlab",".well-known",".zap",
+              "build","config","data","encryptionkeys","frontend","ftp","i18n","lib","logs",
+              "models","monitoring","node_modules","routes","rsn","screenshots","test","uploads","vagrant","views",
+              ".codeclimate.yml",".devcontainer.json",".dockerignore",".eslintrc.js",".gitignore",".gitlab-ci.yml",
+              ".gitpod.yml",".mailmap",".npmrc",
+              "app.json","app.ts","CODE_OF_CONDUCT.md","config.schema.yml","CONTRIBUTING.md","crowdin.yaml","ctf.key",
+              "cypress.config.ts","docker-compose.test.yml","Dockerfile","Gruntfile.js","HALL_OF_FAME.md","LICENSE",
+              "package.json","README.md","REFERENCES.md","SECURITY.md","server.ts","SOLUTIONS.md",
+              "swagger.yml","threat-model.json","tsconfig.json"
           )
 
-          # Keep only existing items
+          # Filter only existing files/folders
           $itemsToZip = $itemsInOrder | Where-Object { Test-Path $_ }
 
-          # Remove old ZIP if exists
+          # Remove any previous ZIP
           if (Test-Path $serverZip) { Remove-Item $serverZip -Force }
 
-          # Add items sequentially to ZIP to preserve order
+          # Add sequentially to preserve order
           foreach ($item in $itemsToZip) {
               Write-Host "Adding $item to ZIP..."
               Compress-Archive -Path $item -Update -DestinationPath $serverZip
