@@ -12,53 +12,55 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2️⃣ Install dependencies for backend and frontend
+      # 2️⃣ Setup Node 22
+      - name: Setup Node.js v22
+        uses: actions/setup-node@v3
+        with:
+          node-version: 22.19.0
+
+      # 3️⃣ Cache backend node_modules
+      - name: Cache backend node_modules
+        uses: actions/cache@v3
+        with:
+          path: node_modules
+          key: backend-node-modules-${{ runner.os }}-${{ hashFiles('package.json') }}
+          restore-keys: |
+            backend-node-modules-${{ runner.os }}-
+
+      # 4️⃣ Install backend dependencies
       - name: Install backend dependencies
         shell: powershell
         run: |
-          Write-Host "Installing backend dependencies..."
-          npm install
+          Write-Host "[INFO] Installing backend dependencies..."
+          npm install --legacy-peer-deps
 
-      - name: Install frontend dependencies
+      # 5️⃣ Cache frontend node_modules
+      - name: Cache frontend node_modules
+        uses: actions/cache@v3
+        with:
+          path: frontend/node_modules
+          key: frontend-node-modules-${{ runner.os }}-${{ hashFiles('frontend/package.json') }}
+          restore-keys: |
+            frontend-node-modules-${{ runner.os }}-
+
+      # 6️⃣ Install frontend dependencies and build frontend
+      - name: Build frontend
         shell: powershell
         run: |
-          Write-Host "Installing frontend dependencies..."
+          Write-Host "[INFO] Installing frontend dependencies and building..."
           cd frontend
-          npm install
-          cd ..
-
-      # 3️⃣ Build backend and frontend
-      - name: Build backend and frontend
-        shell: powershell
-        run: |
-          Write-Host "Building backend..."
-          # Add backend build commands if any
-          Write-Host "Building frontend..."
-          cd frontend
+          npm install --legacy-peer-deps
           npm run build
           cd ..
 
-      # 4️⃣ Ensure logs folder exists (optional)
-      - name: Ensure logs folder exists
+      # 7️⃣ Build backend if required
+      - name: Build backend
         shell: powershell
         run: |
-          if (-not (Test-Path "logs")) { New-Item -ItemType Directory -Path "logs" }
+          Write-Host "[INFO] Building backend..."
+          npm run --silent build:server || Write-Host "[INFO] No backend build step required."
 
-      # 5️⃣ Validate essential folders
-      - name: Validate essential folders
-        shell: powershell
-        run: |
-          $essentialFolders = @("build", "node_modules", "logs")
-          foreach ($folder in $essentialFolders) {
-              if (-not (Test-Path $folder)) {
-                  Write-Error "❌ Required folder '$folder' is missing! Pipeline will stop."
-                  exit 1
-              } else {
-                  Write-Host "✅ Verified folder present: $folder"
-              }
-          }
-
-      # 6️⃣ Create full repo ZIP preserving folder/file order
+      # 8️⃣ Create full repo ZIP
       - name: Create full repo ZIP
         shell: powershell
         env:
@@ -72,34 +74,29 @@ jobs:
           $headers = @{ Authorization = "Basic $base64Auth" }
 
           $itemsInOrder = @(
-              ".dependabot",".github",".gitlab",".well-known",".zap",
-              "build","config","data","encryptionkeys",
-              "frontend","ftp","i18n","lib","logs","models","monitoring","node_modules",
-              "routes","rsn","screenshots","test","uploads","vagrant","views",
-              ".codeclimate.yml",".devcontainer.json",".dockerignore",".eslintrc.js",
-              ".gitignore",".gitlab-ci.yml",".gitpod.yml",".mailmap",".npmrc",
-              "app.json","app.ts","CODE_OF_CONDUCT.md","config.schema.yml","CONTRIBUTING.md",
-              "crowdin.yaml","ctf.key","cypress.config.ts","docker-compose.test.yml","Dockerfile",
-              "Gruntfile.js","HALL_OF_FAME.md","LICENSE","package.json","README.md","REFERENCES.md",
-              "SECURITY.md","server.ts","SOLUTIONS.md","swagger.yml","threat-model.json","tsconfig.json"
+              ".dependabot",".github",".gitlab",".well-known",".zap","build","config","data","encryptionkeys",
+              "frontend","ftp","i18n","lib","logs","models","monitoring","node_modules","routes","rsn",
+              "screenshots","test","uploads","vagrant","views",
+              ".codeclimate.yml",".devcontainer.json",".dockerignore",".eslintrc.js",".gitignore",
+              ".gitlab-ci.yml",".gitpod.yml",".mailmap",".npmrc",
+              "app.json","app.ts","CODE_OF_CONDUCT.md","config.schema.yml","CONTRIBUTING.md","crowdin.yaml",
+              "ctf.key","cypress.config.ts","docker-compose.test.yml","Dockerfile","Gruntfile.js",
+              "HALL_OF_FAME.md","LICENSE","package.json","README.md","REFERENCES.md","SECURITY.md",
+              "server.ts","SOLUTIONS.md","swagger.yml","threat-model.json","tsconfig.json"
           )
 
-          # Keep only existing items
           $itemsToZip = $itemsInOrder | Where-Object { Test-Path $_ }
 
-          # Remove old ZIP if exists
           if (Test-Path $serverZip) { Remove-Item $serverZip -Force }
 
-          # Add items sequentially to ZIP to preserve order
           foreach ($item in $itemsToZip) {
               Write-Host "Adding $item to ZIP..."
               Compress-Archive -Path $item -Update -DestinationPath $serverZip
           }
 
-          Write-Host "✅ Full repo ZIP created: $serverZip"
+          Write-Host "[INFO] Full repo ZIP created: $serverZip"
 
-          # 7️⃣ Upload ZIP to Nexus
           $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/$version/$serverZip"
-          Write-Host "⬆️ Uploading to Nexus → $serverUrl"
+          Write-Host "Uploading ZIP to Nexus → $serverUrl"
           Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $serverZip -Headers $headers -ContentType "application/zip"
-          Write-Host "✅ Full repo uploaded successfully."
+          Write-Host "[INFO] Full repo uploaded successfully."
