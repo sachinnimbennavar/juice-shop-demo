@@ -8,7 +8,7 @@ jobs:
     runs-on: self-hosted
 
     steps:
-      # 1️⃣ Checkout (optional, only for scripts)
+      # 1️⃣ Checkout repository (optional)
       - name: Checkout repository
         uses: actions/checkout@v3
 
@@ -19,11 +19,21 @@ jobs:
           $env:JUICESHOP_PATH = "C:\DeleteafterTest\full-repo-20251024124650"
           Write-Host "[INFO] Juice Shop path: $env:JUICESHOP_PATH"
 
-      # 3️⃣ Install backend dependencies if missing
-      - name: Install backend dependencies
+      # 3️⃣ Ensure logs folder exists
+      - name: Ensure logs folder
         shell: powershell
         run: |
-          cd "$env:JUICESHOP_PATH\server"
+          $logsPath = Join-Path $env:JUICESHOP_PATH "logs"
+          if (-Not (Test-Path $logsPath)) {
+              Write-Host "[INFO] Creating logs folder..."
+              New-Item -ItemType Directory -Path $logsPath
+          }
+
+      # 4️⃣ Install dependencies if node_modules missing
+      - name: Install dependencies
+        shell: powershell
+        run: |
+          cd $env:JUICESHOP_PATH
           if (-Not (Test-Path "node_modules")) {
               Write-Host "[INFO] node_modules not found. Installing dependencies..."
               npm install --legacy-peer-deps
@@ -31,11 +41,11 @@ jobs:
               Write-Host "[INFO] node_modules already exists. Skipping npm install."
           }
 
-      # 4️⃣ Start Juice Shop server
+      # 5️⃣ Run Juice Shop server
       - name: Start Juice Shop server
         shell: powershell
         run: |
-          cd "$env:JUICESHOP_PATH\server"
+          cd $env:JUICESHOP_PATH
           Write-Host "[INFO] Starting Juice Shop server..."
-          Start-Process "node" -ArgumentList "server.js" -NoNewWindow
-          Write-Host "[INFO] Juice Shop server started in background."
+          npx ts-node server.ts
+          Write-Host "[INFO] Juice Shop server started."
