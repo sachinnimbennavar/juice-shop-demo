@@ -1,4 +1,4 @@
-name: Juice Shop ZIP & Nexus Upload (Optimized, Skip node_modules)
+name: Juice Shop ZIP & Nexus Upload (Complete, Verified)
 
 on:
   workflow_dispatch:
@@ -26,6 +26,7 @@ jobs:
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
 
+          # List of items to include in ZIP, in order
           $itemsInOrder = @(
               ".dependabot",".github",".gitlab",".well-known",".zap",
               "build","logs","node_modules","config","data","encryptionkeys",
@@ -44,12 +45,24 @@ jobs:
 
           foreach ($item in $itemsInOrder) {
               if (Test-Path $item) {
-                  if ($item -eq "node_modules" -and (Get-ChildItem node_modules | Measure-Object).Count -gt 1000) {
-                      Write-Host "⚠️ Skipping node_modules folder to save time..."
-                      continue
+                  # Skip node_modules only if very large
+                  if ($item -eq "node_modules") {
+                      $count = (Get-ChildItem node_modules -Recurse | Measure-Object).Count
+                      if ($count -gt 5000) {
+                          Write-Host "⚠️ Skipping node_modules folder to save time (contains $count items)..."
+                          continue
+                      }
                   }
+
                   Write-Host "Adding $item to ZIP..."
                   Compress-Archive -Path $item -DestinationPath $serverZip -Update
+              } else {
+                  # Create empty folder if missing, to ensure it exists in ZIP
+                  if ($item -in @("build","logs","node_modules")) {
+                      Write-Host "Creating empty folder $item..."
+                      New-Item -ItemType Directory -Path $item
+                      Compress-Archive -Path $item -DestinationPath $serverZip -Update
+                  }
               }
           }
 
