@@ -12,26 +12,25 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2️⃣ Set environment variables
-      - name: Set environment variables
-        shell: powershell
-        run: |
-          $env:JUICESHOP_PATH = "C:\DeleteafterTest\full-repo-20251024124650"
-          Write-Host "[INFO] Juice Shop path: $env:JUICESHOP_PATH"
-
-      # 3️⃣ Ensure logs folder exists
+      # 2️⃣ Ensure logs folder exists
       - name: Ensure logs folder
         shell: powershell
+        env:
+          JUICESHOP_PATH: C:\DeleteafterTest\full-repo-20251024124650
         run: |
           $logsPath = Join-Path $env:JUICESHOP_PATH "logs"
           if (-Not (Test-Path $logsPath)) {
               Write-Host "[INFO] Creating logs folder..."
               New-Item -ItemType Directory -Path $logsPath
+          } else {
+              Write-Host "[INFO] Logs folder already exists."
           }
 
-      # 4️⃣ Install dependencies if node_modules missing
+      # 3️⃣ Install dependencies if node_modules missing
       - name: Install dependencies
         shell: powershell
+        env:
+          JUICESHOP_PATH: C:\DeleteafterTest\full-repo-20251024124650
         run: |
           cd $env:JUICESHOP_PATH
           if (-Not (Test-Path "node_modules")) {
@@ -41,9 +40,11 @@ jobs:
               Write-Host "[INFO] node_modules already exists. Skipping npm install."
           }
 
-      # 5️⃣ Run Juice Shop server
+      # 4️⃣ Run Juice Shop server
       - name: Start Juice Shop server
         shell: powershell
+        env:
+          JUICESHOP_PATH: C:\DeleteafterTest\full-repo-20251024124650
         run: |
           cd $env:JUICESHOP_PATH
           Write-Host "[INFO] Starting Juice Shop server..."
