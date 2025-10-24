@@ -1,43 +1,84 @@
-name: Juice Shop Run from Unzipped Repo
+name: JuiceShop Deployment
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # Manual trigger
 
 jobs:
-  run-juice-shop:
-    runs-on: self-hosted
+  deploy-juice-shop:
+    runs-on: windows-latest
+
+    env:
+      JUICE_SHOP_PATH: C:\Users\admin\Desktop\TESTING\juice-shop
+      SITE_NAME: JuiceShop
+      SITE_PORT: 80
+      APP_PORT: 3000
 
     steps:
-      # 1️⃣ Set Juice Shop path
-      - name: Set Juice Shop path
-        shell: powershell
-        run: |
-          $env:JUICESHOP_PATH = "C:\DeleteafterTest\full-repo-20251024130742"
-          Write-Host "Juice Shop path set to $env:JUICESHOP_PATH"
+    # Step 1: Checkout repo (optional if using artifacts)
+    - name: Checkout repository
+      uses: actions/checkout@v3
 
-      # 2️⃣ Install dependencies
-      - name: Install dependencies
-        shell: powershell
-        run: |
-          cd $env:JUICESHOP_PATH
-          Write-Host "Installing Node.js dependencies..."
-          npm install
+    # Step 2: Ensure folder exists
+    - name: Ensure Juice Shop folder exists
+      shell: powershell
+      run: |
+        if (-Not (Test-Path "${{ env.JUICE_SHOP_PATH }}")) {
+            New-Item -ItemType Directory -Path "${{ env.JUICE_SHOP_PATH }}"
+        }
+        Write-Host "Folder ready: $env:JUICE_SHOP_PATH"
 
-      # 3️⃣ Build frontend
-      - name: Build frontend
-        shell: powershell
-        run: |
-          cd $env:JUICESHOP_PATH
-          npm run build:frontend
+    # Step 3: Install dependencies
+    - name: Install Node.js dependencies
+      shell: powershell
+      run: |
+        cd "${{ env.JUICE_SHOP_PATH }}"
+        npm install --legacy-peer-deps
+        Write-Host "Dependencies installed."
 
-      # 4️⃣ Start server using PM2
-      - name: Start Juice Shop server
-        shell: powershell
-        run: |
-          cd $env:JUICESHOP_PATH
-          # Stop previous instance if exists
-          npx pm2 delete juice-shop || Write-Host "No existing PM2 process found"
-          # Start server
-          npx pm2 start server.ts --name juice-shop
-          npx pm2 save
-          Write-Host "Juice Shop server started with PM2"
+    # Step 4: Start Juice Shop in background
+    - name: Start Juice Shop
+      shell: powershell
+      run: |
+        cd "${{ env.JUICE_SHOP_PATH }}"
+        Start-Process "npm" -ArgumentList "start"
+        Write-Host "Juice Shop started on localhost:3000"
+
+    # Step 5: Configure IIS and reverse proxy
+    - name: Configure IIS Reverse Proxy
+      shell: powershell
+      run: |
+        Import-Module WebAdministration
+
+        # Create IIS site if not exists
+        if (-not (Get-Website -Name "${{ env.SITE_NAME }}" -ErrorAction SilentlyContinue)) {
+            New-Website -Name "${{ env.SITE_NAME }}" -PhysicalPath "${{ env.JUICE_SHOP_PATH }}" -Port $env:SITE_PORT
+            Write-Host "IIS site '${{ env.SITE_NAME }}' created on port $env:SITE_PORT."
+        } else {
+            Write-Host "IIS site '${{ env.SITE_NAME }}' already exists."
+        }
+
+        # Enable ARR proxy
+        Set-WebConfigurationProperty -filter "system.webServer/proxy" -name "enabled" -value "True" -PSPath "IIS:\"
+
+        # Add URL Rewrite rule for reverse proxy
+        $ruleExists = Get-WebConfigurationProperty -Filter "system.webServer/rewrite/rules/rule[@name='JuiceShopProxy']" -Name "name" -PSPath "IIS:\"
+        if (-not $ruleExists) {
+            Add-WebConfigurationProperty -pspath 'IIS:\' -filter "system.webServer/rewrite/rules" -name "." -value @{
+                name='JuiceShopProxy';
+                enabled='true';
+                patternSyntax='Wildcard';
+                stopProcessing='true';
+            }
+            Add-WebConfigurationProperty -pspath 'IIS:\' -filter "system.webServer/rewrite/rules/rule[@name='JuiceShopProxy']/match" -name "." -value @{
+                url='*';
+            }
+            Add-WebConfigurationProperty -pspath 'IIS:\' -filter "system.webServer/rewrite/rules/rule[@name='JuiceShopProxy']/action" -name "." -value @{
+                type='Rewrite';
+                url='http://localhost:$env:APP_PORT/{R:0}';
+            }
+            Write-Host "URL Rewrite reverse proxy rule created."
+        } else {
+            Write-Host "URL Rewrite rule already exists."
+        }
+
+        Write-Host "IIS configuration completed. Juice Shop should be accessible externally on port $env:SITE_PORT."
