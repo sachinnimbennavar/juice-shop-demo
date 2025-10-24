@@ -1,10 +1,10 @@
-name: Juice Shop Full Repo Upload (Optimized)
+name: Juice Shop ZIP & Nexus Upload Resume (Optimized, Skip node_modules)
 
 on:
   workflow_dispatch:
 
 jobs:
-  full-repo-upload:
+  zip-and-upload:
     runs-on: self-hosted
 
     steps:
@@ -12,40 +12,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2️⃣ Setup Node.js v22.19.0
-      - name: Setup Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: 22.19.0
-
-      # 3️⃣ Install backend dependencies (skip optional warnings)
-      - name: Install backend dependencies
-        shell: powershell
-        run: |
-          Write-Host "[INFO] Installing backend dependencies..."
-          npm install --legacy-peer-deps
-
-      # 4️⃣ Build frontend and backend
-      - name: Build frontend
-        shell: powershell
-        run: |
-          Write-Host "[INFO] Building frontend..."
-          cd frontend
-          npm install --legacy-peer-deps
-          npm run build
-          cd ..
-
-      - name: Build backend
-        shell: powershell
-        run: |
-          Write-Host "[INFO] Building backend..."
-          if (Test-Path "server.ts") {
-              npx tsc || Write-Host "[INFO] Backend build skipped or already compiled."
-          } else {
-              Write-Host "[INFO] No backend build step found — skipping."
-          }
-
-      # 5️⃣ Create full repo ZIP using 7-Zip
+      # 2️⃣ Create full repo ZIP (skip node_modules if already present)
       - name: Create full repo ZIP
         shell: powershell
         env:
@@ -59,27 +26,37 @@ jobs:
           $headers = @{ Authorization = "Basic $base64Auth" }
 
           $itemsInOrder = @(
-            ".dependabot",".github",".gitlab",".well-known",".zap","build","config","data","encryptionkeys",
-            "frontend","ftp","i18n","lib","logs","models","monitoring","node_modules","routes","rsn",
-            "screenshots","test","uploads","vagrant","views",
-            ".codeclimate.yml",".devcontainer.json",".dockerignore",".eslintrc.js",".gitignore",
-            ".gitlab-ci.yml",".gitpod.yml",".mailmap",".npmrc",
-            "app.json","app.ts","CODE_OF_CONDUCT.md","config.schema.yml","CONTRIBUTING.md","crowdin.yaml",
-            "ctf.key","cypress.config.ts","docker-compose.test.yml","Dockerfile","Gruntfile.js",
-            "HALL_OF_FAME.md","LICENSE","package.json","README.md","REFERENCES.md","SECURITY.md",
-            "server.ts","SOLUTIONS.md","swagger.yml","threat-model.json","tsconfig.json"
+              ".dependabot",".github",".gitlab",".well-known",".zap",
+              "build","logs","node_modules","config","data","encryptionkeys",
+              "frontend","ftp","i18n","lib","models","monitoring",
+              "routes","rsn","screenshots","test","uploads","vagrant","views",
+              ".codeclimate.yml",".devcontainer.json",".dockerignore",".eslintrc.js",
+              ".gitignore",".gitlab-ci.yml",".gitpod.yml",".mailmap",".npmrc",
+              "app.json","app.ts","CODE_OF_CONDUCT.md","config.schema.yml","CONTRIBUTING.md",
+              "crowdin.yaml","ctf.key","cypress.config.ts","docker-compose.test.yml","Dockerfile",
+              "Gruntfile.js","HALL_OF_FAME.md","LICENSE","package.json","README.md",
+              "REFERENCES.md","SECURITY.md","server.ts","SOLUTIONS.md","swagger.yml",
+              "threat-model.json","tsconfig.json"
           )
 
-          # Only include existing items
-          $items = $itemsInOrder | Where-Object { Test-Path $_ } | ForEach-Object { "`"$_`"" }
-          $itemsString = $items -join " "
+          if (Test-Path $serverZip) { Remove-Item $serverZip -Force }
 
-          Write-Host "[INFO] Creating ZIP with 7-Zip..."
-          & "C:\Program Files\7-Zip\7z.exe" a -tzip $serverZip $itemsString
-          Write-Host "[INFO] Full repo ZIP created: $serverZip"
+          foreach ($item in $itemsInOrder) {
+              if (Test-Path $item) {
+                  # Skip node_modules if already exists and is large
+                  if ($item -eq "node_modules" -and (Get-ChildItem node_modules | Measure-Object).Count -gt 1000) {
+                      Write-Host "⚠️ Skipping node_modules folder to save time..."
+                      continue
+                  }
+                  Write-Host "Adding $item to ZIP..."
+                  Compress-Archive -Path $item -DestinationPath $serverZip -Force
+              }
+          }
 
-          # 6️⃣ Upload ZIP to Nexus
+          Write-Host "✅ Full repo ZIP created: $serverZip"
+
+          # 3️⃣ Upload ZIP to Nexus
           $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/$version/$serverZip"
-          Write-Host "[INFO] Uploading to Nexus → $serverUrl"
+          Write-Host "⬆️ Uploading to Nexus → $serverUrl"
           Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $serverZip -Headers $headers -ContentType "application/zip"
-          Write-Host "[INFO] Full repo uploaded successfully."
+          Write-Host "✅ Full repo uploaded successfully."
