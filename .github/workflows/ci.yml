@@ -16,11 +16,16 @@ jobs:
         with:
           node-version: 22.19.0
 
+      - name: Install TypeScript
+        shell: powershell
+        run: |
+          Write-Host "[INFO] Installing TypeScript..."
+          npm install typescript --save-dev
+
       - name: Run backend build (PowerShell-safe, ASCII only)
         shell: powershell
         run: |
           Write-Host "[INFO] Starting backend build..."
-          # Try to run build:server; handle missing script and non-zero exits cleanly
           try {
             npm run --silent build:server
             $code = $LASTEXITCODE
@@ -32,6 +37,4 @@ jobs:
             }
           } catch {
             Write-Host "[INFO] No backend build script found or an exception occurred. Skipping backend build."
-            # If you want this to fail instead of skip, uncomment the next line:
-            # exit 1
           }
