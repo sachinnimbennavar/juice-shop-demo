@@ -8,41 +8,52 @@ jobs:
     runs-on: windows-latest
 
     env:
-      JUICE_SHOP_PATH: C:\Users\admin\Desktop\TESTING\juice-shop
       SITE_NAME: JuiceShop
       SITE_PORT: 80
       APP_PORT: 3000
 
     steps:
-    # Step 1: Checkout repo (optional if using artifacts)
+    # Step 1: Checkout repository
     - name: Checkout repository
       uses: actions/checkout@v3
 
-    # Step 2: Install Node.js dependencies (includes frontend build)
+    # Step 2: Install Node.js (LTS) using setup-node
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '22.x'  # Matches your local Node.js version
+
+    # Step 3: Install dependencies and build frontend
     - name: Install Node.js dependencies
       shell: powershell
       run: |
-        cd "${{ env.JUICE_SHOP_PATH }}"
+        cd ${{ github.workspace }}
         npm install --legacy-peer-deps
         Write-Host "Dependencies installed and frontend built."
 
-    # Step 3: Start Juice Shop in background
+    # Step 4: Start Juice Shop in background
     - name: Start Juice Shop
       shell: powershell
       run: |
-        cd "${{ env.JUICE_SHOP_PATH }}"
+        cd ${{ github.workspace }}
         Start-Process "npm" -ArgumentList "start"
         Write-Host "Juice Shop started on localhost:3000"
 
-    # Step 4: Configure IIS Reverse Proxy (optional)
+    # Step 5: Configure IIS Reverse Proxy (optional)
     - name: Configure IIS Reverse Proxy
+      if: runner.os == 'Windows'
       shell: powershell
       run: |
         Import-Module WebAdministration
+
         if (-not (Get-Website -Name "${{ env.SITE_NAME }}" -ErrorAction SilentlyContinue)) {
-            New-Website -Name "${{ env.SITE_NAME }}" -PhysicalPath "${{ env.JUICE_SHOP_PATH }}" -Port $env:SITE_PORT
+            New-Website -Name "${{ env.SITE_NAME }}" -PhysicalPath "${{ github.workspace }}" -Port $env:SITE_PORT
         }
+
+        # Enable ARR proxy
         Set-WebConfigurationProperty -filter "system.webServer/proxy" -name "enabled" -value "True" -PSPath "IIS:\"
+
+        # Add URL Rewrite rule for reverse proxy
         $ruleExists = Get-WebConfigurationProperty -Filter "system.webServer/rewrite/rules/rule[@name='JuiceShopProxy']" -Name "name" -PSPath "IIS:\"
         if (-not $ruleExists) {
             Add-WebConfigurationProperty -pspath 'IIS:\' -filter "system.webServer/rewrite/rules" -name "." -value @{
