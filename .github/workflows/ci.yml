@@ -1,4 +1,4 @@
-name: Juice Shop Run from Unzipped Nexus ZIP
+name: Juice Shop Run from Unzipped Repo
 
 on:
   workflow_dispatch:
@@ -8,45 +8,36 @@ jobs:
     runs-on: self-hosted
 
     steps:
-      # 1️⃣ Checkout repository (optional)
-      - name: Checkout repository
-        uses: actions/checkout@v3
-
-      # 2️⃣ Ensure logs folder exists
-      - name: Ensure logs folder
+      # 1️⃣ Set Juice Shop path
+      - name: Set Juice Shop path
         shell: powershell
-        env:
-          JUICESHOP_PATH: C:\DeleteafterTest\full-repo-20251024124650
         run: |
-          $logsPath = Join-Path $env:JUICESHOP_PATH "logs"
-          if (-Not (Test-Path $logsPath)) {
-              Write-Host "[INFO] Creating logs folder..."
-              New-Item -ItemType Directory -Path $logsPath
-          } else {
-              Write-Host "[INFO] Logs folder already exists."
-          }
+          $env:JUICESHOP_PATH = "C:\DeleteafterTest\full-repo-20251024130742"
+          Write-Host "Juice Shop path set to $env:JUICESHOP_PATH"
 
-      # 3️⃣ Install dependencies if node_modules missing
+      # 2️⃣ Install dependencies
       - name: Install dependencies
         shell: powershell
-        env:
-          JUICESHOP_PATH: C:\DeleteafterTest\full-repo-20251024124650
         run: |
           cd $env:JUICESHOP_PATH
-          if (-Not (Test-Path "node_modules")) {
-              Write-Host "[INFO] node_modules not found. Installing dependencies..."
-              npm install --legacy-peer-deps
-          } else {
-              Write-Host "[INFO] node_modules already exists. Skipping npm install."
-          }
+          Write-Host "Installing Node.js dependencies..."
+          npm install
 
-      # 4️⃣ Run Juice Shop server
+      # 3️⃣ Build frontend
+      - name: Build frontend
+        shell: powershell
+        run: |
+          cd $env:JUICESHOP_PATH
+          npm run build:frontend
+
+      # 4️⃣ Start server using PM2
       - name: Start Juice Shop server
         shell: powershell
-        env:
-          JUICESHOP_PATH: C:\DeleteafterTest\full-repo-20251024124650
         run: |
           cd $env:JUICESHOP_PATH
-          Write-Host "[INFO] Starting Juice Shop server..."
-          npx ts-node server.ts
-          Write-Host "[INFO] Juice Shop server started."
+          # Stop previous instance if exists
+          npx pm2 delete juice-shop || Write-Host "No existing PM2 process found"
+          # Start server
+          npx pm2 start server.ts --name juice-shop
+          npx pm2 save
+          Write-Host "Juice Shop server started with PM2"
