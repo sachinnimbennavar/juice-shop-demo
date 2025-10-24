@@ -1,4 +1,4 @@
-name: Re-run Backend Build Only
+name: Retry Backend Build Only
 
 on:
   workflow_dispatch:
@@ -8,28 +8,30 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      # Checkout code
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Use same Node version
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22.19.0
 
-      # Run backend build only (PowerShell safe)
-      - name: Build backend
+      - name: Run backend build (PowerShell-safe, ASCII only)
         shell: powershell
         run: |
           Write-Host "[INFO] Starting backend build..."
+          # Try to run build:server; handle missing script and non-zero exits cleanly
           try {
             npm run --silent build:server
-            if ($LASTEXITCODE -eq 0) {
-              Write-Host "[INFO] ✅ Backend build completed successfully."
+            $code = $LASTEXITCODE
+            if ($code -eq 0) {
+              Write-Host "[INFO] Backend build completed successfully."
             } else {
-              Write-Host "[INFO] ⚠️ Backend build script returned non-zero exit code."
+              Write-Host "[ERROR] Backend build finished with non-zero exit code: $code"
+              exit $code
             }
           } catch {
-            Write-Host "[INFO] ⚠️ No backend build step found — skipping."
+            Write-Host "[INFO] No backend build script found or an exception occurred. Skipping backend build."
+            # If you want this to fail instead of skip, uncomment the next line:
+            # exit 1
           }
