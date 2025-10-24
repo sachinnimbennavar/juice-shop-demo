@@ -1,67 +1,84 @@
-name: JuiceShop Deployment
+name: Run Juice Shop on IIS
 
 on:
-  workflow_dispatch:  # Manual trigger
+  workflow_dispatch:
 
 jobs:
-  deploy-juice-shop:
+  deploy:
     runs-on: windows-latest
 
-    env:
-      SITE_NAME: JuiceShop
-      SITE_PORT: 80
-      APP_PORT: 3000
-
     steps:
-    # Step 1: Checkout repository
-    - name: Checkout repository
-      uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-    # Step 2: Install Node.js (LTS) using setup-node
-    - name: Setup Node.js
-      uses: actions/setup-node@v3
-      with:
-        node-version: '22.x'  # Matches your local Node.js version
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 22
 
-    # Step 3: Install dependencies and build frontend
-    - name: Install Node.js dependencies
-      shell: powershell
-      run: |
-        cd ${{ github.workspace }}
-        npm install --legacy-peer-deps
-        Write-Host "Dependencies installed and frontend built."
+      - name: Install IIS, URL Rewrite, and ARR
+        shell: powershell
+        run: |
+          Write-Host "[INFO] Installing IIS features..."
+          Enable-WindowsOptionalFeature -Online -FeatureName IIS-WebServerRole -All -NoRestart
+          Enable-WindowsOptionalFeature -Online -FeatureName IIS-WebServerManagementTools -All -NoRestart
+          Enable-WindowsOptionalFeature -Online -FeatureName IIS-ManagementConsole -All -NoRestart
 
-    # Step 4: Start Juice Shop in background
-    - name: Start Juice Shop
-      shell: powershell
-      run: |
-        cd ${{ github.workspace }}
-        Start-Process "npm" -ArgumentList "start"
-        Write-Host "Juice Shop started on localhost:3000"
+          Write-Host "[INFO] Installing URL Rewrite and ARR if not present..."
+          $rewrite = "C:\temp\rewrite.msi"
+          $arr = "C:\temp\arr.msi"
+          New-Item -ItemType Directory -Force -Path "C:\temp" | Out-Null
+          Invoke-WebRequest -Uri "https://download.microsoft.com/download/D/3/4/D34A6B61-A034-4A25-8D8B-AE655B56B0D1/rewrite_amd64_en-US.msi" -OutFile $rewrite
+          Invoke-WebRequest -Uri "https://download.microsoft.com/download/8/5/A/85A8E7A9-3793-4D59-9B4E-3EE2C058CB9D/requestRouter_x64.msi" -OutFile $arr
+          Start-Process msiexec.exe -Wait -ArgumentList '/i', $rewrite, '/quiet', '/norestart'
+          Start-Process msiexec.exe -Wait -ArgumentList '/i', $arr, '/quiet', '/norestart'
 
-    # Step 5: Configure IIS Reverse Proxy (optional)
-    - name: Configure IIS Reverse Proxy
-      if: runner.os == 'Windows'
-      shell: powershell
-      run: |
-        Import-Module WebAdministration
+      - name: Install dependencies and build Juice Shop
+        shell: powershell
+        run: |
+          Write-Host "[INFO] Starting Juice Shop setup..."
+          cd "C:\Users\admin\Desktop\TESTING\juice-shop"
+          npm install --legacy-peer-deps
+          npm run build:frontend
+          Write-Host "[INFO] Juice Shop dependencies installed and frontend built."
 
-        if (-not (Get-Website -Name "${{ env.SITE_NAME }}" -ErrorAction SilentlyContinue)) {
-            New-Website -Name "${{ env.SITE_NAME }}" -PhysicalPath "${{ github.workspace }}" -Port $env:SITE_PORT
-        }
+      - name: Start Juice Shop server
+        shell: powershell
+        run: |
+          Write-Host "[INFO] Starting Juice Shop server..."
+          Start-Process -FilePath "npm" -ArgumentList "start" -WorkingDirectory "C:\Users\admin\Desktop\TESTING\juice-shop"
+          Start-Sleep -Seconds 10
+          Write-Host "[INFO] Juice Shop started on localhost:3000"
 
-        # Enable ARR proxy
-        Set-WebConfigurationProperty -filter "system.webServer/proxy" -name "enabled" -value "True" -PSPath "IIS:\"
+      - name: Configure IIS Reverse Proxy
+        shell: powershell
+        run: |
+          Import-Module WebAdministration
 
-        # Add URL Rewrite rule for reverse proxy
-        $ruleExists = Get-WebConfigurationProperty -Filter "system.webServer/rewrite/rules/rule[@name='JuiceShopProxy']" -Name "name" -PSPath "IIS:\"
-        if (-not $ruleExists) {
-            Add-WebConfigurationProperty -pspath 'IIS:\' -filter "system.webServer/rewrite/rules" -name "." -value @{
-                name='JuiceShopProxy'; enabled='true'; patternSyntax='Wildcard'; stopProcessing='true';
-            }
-            Add-WebConfigurationProperty -pspath 'IIS:\' -filter "system.webServer/rewrite/rules/rule[@name='JuiceShopProxy']/match" -name "." -value @{url='*'}
-            Add-WebConfigurationProperty -pspath 'IIS:\' -filter "system.webServer/rewrite/rules/rule[@name='JuiceShopProxy']/action" -name "." -value @{
-                type='Rewrite'; url='http://localhost:$env:APP_PORT/{R:0}'
-            }
-        }
-        Write-Host "IIS configuration completed. Juice Shop accessible externally."
+          $siteName = "JuiceShop"
+          $physicalPath = "C:\Users\admin\Desktop\TESTING\juice-shop"
+
+          # Remove if exists
+          if (Test-Path IIS:\Sites\$siteName) {
+            Remove-WebSite -Name $siteName
+          }
+
+          New-WebSite -Name $siteName -Port 80 -PhysicalPath $physicalPath -Force
+
+          # Enable proxy
+          Set-WebConfigurationProperty -pspath 'MACHINE/WEBROOT/APPHOST' -filter "system.webServer/proxy" -name "enabled" -value "True"
+
+          # Create rewrite rule to forward to Node.js app
+          $configPath = "MACHINE/WEBROOT/APPHOST/$siteName"
+          Add-WebConfiguration -Filter "system.webServer/rewrite/rules/rule[@name='ReverseProxyRule']" -PSPath $configPath -Value @{
+              name='ReverseProxyRule'
+              enabled='true'
+              patternSyntax='Wildcard'
+              stopProcessing='true'
+          }
+          Add-WebConfigurationProperty -pspath $configPath -filter "system.webServer/rewrite/rules/rule[@name='ReverseProxyRule']/match" -name "." -value @{url='*'}
+          Add-WebConfigurationProperty -pspath $configPath -filter "system.webServer/rewrite/rules/rule[@name='ReverseProxyRule']/action" -name "." -value @{type='Rewrite';url='http://localhost:3000/{R:0}'}
+
+          Start-WebSite -Name $siteName
+          Write-Host "[SUCCESS] IIS reverse proxy configured. Juice Shop accessible at http://<server-ip>"
+
