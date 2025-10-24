@@ -1,83 +1,41 @@
-name: Juice Shop ZIP & Nexus Upload (Complete, Verified)
+name: Juice Shop Run from Unzipped Nexus ZIP
 
 on:
   workflow_dispatch:
 
 jobs:
-  zip-and-upload:
+  run-juice-shop:
     runs-on: self-hosted
 
     steps:
-      # 1️⃣ Checkout repository
+      # 1️⃣ Checkout (optional, only for scripts)
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2️⃣ Create full repo ZIP
-      - name: Create full repo ZIP
+      # 2️⃣ Set environment variables
+      - name: Set environment variables
         shell: powershell
-        env:
-          NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
-          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
-          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
-          $version = (Get-Date -Format "yyyyMMddHHmmss")
-          $serverZip = "full-repo-$version.zip"
+          $env:JUICESHOP_PATH = "C:\DeleteafterTest\full-repo-20251024124650"
+          Write-Host "[INFO] Juice Shop path: $env:JUICESHOP_PATH"
 
-          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
-          $headers = @{ Authorization = "Basic $base64Auth" }
-
-          # List of items to include in ZIP, in order
-          $itemsInOrder = @(
-              ".dependabot",".github",".gitlab",".well-known",".zap",
-              "build","logs","node_modules","config","data","encryptionkeys",
-              "frontend","ftp","i18n","lib","models","monitoring",
-              "routes","rsn","screenshots","test","uploads","vagrant","views",
-              ".codeclimate.yml",".devcontainer.json",".dockerignore",".eslintrc.js",
-              ".gitignore",".gitlab-ci.yml",".gitpod.yml",".mailmap",".npmrc",
-              "app.json","app.ts","CODE_OF_CONDUCT.md","config.schema.yml","CONTRIBUTING.md",
-              "crowdin.yaml","ctf.key","cypress.config.ts","docker-compose.test.yml","Dockerfile",
-              "Gruntfile.js","HALL_OF_FAME.md","LICENSE","package.json","README.md",
-              "REFERENCES.md","SECURITY.md","server.ts","SOLUTIONS.md","swagger.yml",
-              "threat-model.json","tsconfig.json"
-          )
-
-          if (Test-Path $serverZip) { Remove-Item $serverZip -Force }
-
-          foreach ($item in $itemsInOrder) {
-              if (Test-Path $item) {
-                  # Skip node_modules only if very large
-                  if ($item -eq "node_modules") {
-                      $count = (Get-ChildItem node_modules -Recurse | Measure-Object).Count
-                      if ($count -gt 5000) {
-                          Write-Host "⚠️ Skipping node_modules folder to save time (contains $count items)..."
-                          continue
-                      }
-                  }
-
-                  Write-Host "Adding $item to ZIP..."
-                  Compress-Archive -Path $item -DestinationPath $serverZip -Update
-              } else {
-                  # Create empty folder if missing, to ensure it exists in ZIP
-                  if ($item -in @("build","logs","node_modules")) {
-                      Write-Host "Creating empty folder $item..."
-                      New-Item -ItemType Directory -Path $item
-                      Compress-Archive -Path $item -DestinationPath $serverZip -Update
-                  }
-              }
+      # 3️⃣ Install backend dependencies if missing
+      - name: Install backend dependencies
+        shell: powershell
+        run: |
+          cd "$env:JUICESHOP_PATH\server"
+          if (-Not (Test-Path "node_modules")) {
+              Write-Host "[INFO] node_modules not found. Installing dependencies..."
+              npm install --legacy-peer-deps
+          } else {
+              Write-Host "[INFO] node_modules already exists. Skipping npm install."
           }
 
-          # 3️⃣ Verify ZIP size
-          $size = (Get-Item $serverZip).Length
-          Write-Host "[INFO] ZIP file size: $size bytes"
-          if ($size -lt 100000) {  # 100 KB minimal sanity check
-              Write-Error "ZIP file size too small. Likely incomplete!"
-              exit 1
-          }
-
-          Write-Host "✅ Full repo ZIP created: $serverZip"
-
-          # 4️⃣ Upload ZIP to Nexus
-          $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/$version/$serverZip"
-          Write-Host "⬆️ Uploading to Nexus → $serverUrl"
-          Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $serverZip -Headers $headers -ContentType "application/zip"
-          Write-Host "✅ Full repo uploaded successfully."
+      # 4️⃣ Start Juice Shop server
+      - name: Start Juice Shop server
+        shell: powershell
+        run: |
+          cd "$env:JUICESHOP_PATH\server"
+          Write-Host "[INFO] Starting Juice Shop server..."
+          Start-Process "node" -ArgumentList "server.js" -NoNewWindow
+          Write-Host "[INFO] Juice Shop server started in background."
