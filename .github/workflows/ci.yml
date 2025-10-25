@@ -1,79 +1,70 @@
-name: Juice Shop ZIP & Nexus Upload (Complete, Verified)
+name: Juice Shop Deployment
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # Manual trigger only
 
 jobs:
-  zip-and-upload:
+  deploy:
     runs-on: self-hosted
 
+    env:
+      NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
+      DEPLOY_PATH: C:\SSDLC\Nexus_Unzips  # Where to unzip the latest full repo
+
     steps:
-      # 1️⃣ Checkout repository (optimized)
-      - name: Checkout repository
+      - name: 🧩 Checkout code
         uses: actions/checkout@v3
         with:
-          fetch-depth: 1               # Only latest commit
-          lfs: false                   # Skip LFS objects if not needed
-          submodules: false            # Skip submodules if not needed
+          fetch-depth: 1
 
-      # 2️⃣ Create full repo ZIP
-      - name: Create full repo ZIP
+      - name: ⚙️ Setup PowerShell environment
+        shell: powershell
+        run: |
+          Write-Host "[INFO] Deployment job started..."
+          Write-Host "Working directory: $PWD"
+
+      - name: 🚀 Download & unzip latest Nexus full-repo ZIP
         shell: powershell
         env:
-          NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
-          $version = (Get-Date -Format "yyyyMMddHHmmss")
-          $serverZip = "full-repo-$version.zip"
+          # Prepare Basic Auth
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
 
-          $itemsInOrder = @(
-              ".dependabot",".github",".gitlab",".well-known",".zap",
-              "build","logs","node_modules","config","data","encryptionkeys",
-              "frontend","ftp","i18n","lib","models","monitoring",
-              "routes","rsn","screenshots","test","uploads","vagrant","views",
-              ".codeclimate.yml",".devcontainer.json",".dockerignore",".eslintrc.js",
-              ".gitignore",".gitlab-ci.yml",".gitpod.yml",".mailmap",".npmrc",
-              "app.json","app.ts","CODE_OF_CONDUCT.md","config.schema.yml","CONTRIBUTING.md",
-              "crowdin.yaml","ctf.key","cypress.config.ts","docker-compose.test.yml","Dockerfile",
-              "Gruntfile.js","HALL_OF_FAME.md","LICENSE","package.json","README.md",
-              "REFERENCES.md","SECURITY.md","server.ts","SOLUTIONS.md","swagger.yml",
-              "threat-model.json","tsconfig.json"
-          )
+          # Get latest version by listing the directory on Nexus
+          $metadataUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/"
+          Write-Host "[INFO] Fetching latest version from $metadataUrl ..."
 
-          if (Test-Path $serverZip) { Remove-Item $serverZip -Force }
-
-          foreach ($item in $itemsInOrder) {
-              if (Test-Path $item) {
-                  if ($item -eq "node_modules") {
-                      $count = (Get-ChildItem node_modules -Recurse | Measure-Object).Count
-                      if ($count -gt 5000) {
-                          Write-Host "⚠️ Skipping node_modules folder to save time (contains $count items)..."
-                          continue
-                      }
-                  }
-                  Write-Host "Adding $item to ZIP..."
-                  Compress-Archive -Path $item -DestinationPath $serverZip -Update
-              } else {
-                  if ($item -in @("build","logs","node_modules")) {
-                      Write-Host "Creating empty folder $item..."
-                      New-Item -ItemType Directory -Path $item
-                      Compress-Archive -Path $item -DestinationPath $serverZip -Update
-                  }
-              }
-          }
-
-          $size = (Get-Item $serverZip).Length
-          Write-Host "[INFO] ZIP file size: $size bytes"
-          if ($size -lt 100000) {
-              Write-Error "ZIP file size too small. Likely incomplete!"
+          try {
+              # Get list of versions (directories)
+              $response = Invoke-WebRequest -Uri $metadataUrl -Headers $headers
+              $links = ($response.ParsedHtml.getElementsByTagName("a") | ForEach-Object { $_.innerText }) -match '\d{14}' 
+              if ($links.Count -eq 0) { throw "No versions found!" }
+              $latestVersion = ($links | Sort-Object | Select-Object -Last 1)
+              Write-Host "[INFO] Latest full-repo version: $latestVersion"
+          } catch {
+              Write-Host "[ERROR] Failed to fetch latest version: $_"
               exit 1
           }
-          Write-Host "✅ Full repo ZIP created: $serverZip"
 
-          $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/$version/$serverZip"
-          Write-Host "⬆️ Uploading to Nexus → $serverUrl"
-          Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $serverZip -Headers $headers -ContentType "application/zip"
-          Write-Host "✅ Full repo uploaded successfully."
+          # Download latest ZIP
+          $zipFileName = "full-repo-$latestVersion.zip"
+          $zipUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/$latestVersion/$zipFileName"
+          $zipFilePath = Join-Path $PWD $zipFileName
+          Write-Host "[INFO] Downloading $zipUrl ..."
+          Invoke-WebRequest -Uri $zipUrl -OutFile $zipFilePath -Headers $headers
+
+          if (-Not (Test-Path $zipFilePath)) { 
+              Write-Host "[ERROR] ZIP file not downloaded!"
+              exit 1
+          }
+
+          # Ensure deploy path exists
+          if (-Not (Test-Path "${env:DEPLOY_PATH}")) { New-Item -ItemType Directory -Path "${env:DEPLOY_PATH}" }
+
+          # Unzip to deploy path
+          Write-Host "[INFO] Extracting $zipFileName to ${env:DEPLOY_PATH} ..."
+          Expand-Archive -Path $zipFilePath -DestinationPath "${env:DEPLOY_PATH}" -Force
+          Write-Host "[SUCCESS] Deployment completed successfully!"
