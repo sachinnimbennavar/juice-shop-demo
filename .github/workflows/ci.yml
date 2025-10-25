@@ -4,71 +4,73 @@ on:
   workflow_dispatch:  # Manual trigger only
 
 jobs:
-  deploy:
+  deploy-latest-zip:
     runs-on: self-hosted
 
     env:
-      NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
+      NEXUS_URL: http://127.0.0.1:8081
+      NEXUS_REPO: JuiceShopMavenDemo
       DEPLOY_PATH: C:\SSDLC\Nexus_Unzips
 
     steps:
-      - name: 🧩 Checkout code
+      # 1️⃣ Checkout repository
+      - name: Checkout repository
         uses: actions/checkout@v3
+        with:
+          fetch-depth: 1
+          lfs: false
+          submodules: false
 
-      - name: ⚙️ Setup PowerShell environment
-        shell: powershell
-        run: |
-          Write-Host "[INFO] Deployment job started..."
-          Write-Host "Working directory: $PWD"
-
-      - name: 🚀 Download and unzip latest full-repo ZIP from Nexus
+      # 2️⃣ Deploy latest Nexus ZIP
+      - name: Download & Unzip latest full-repo ZIP from Nexus
         shell: powershell
         env:
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
+          Write-Host "[INFO] Starting deployment..."
+
           # Prepare Basic Auth
           $base64Auth = [System.Convert]::ToBase64String(
               [System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}")
           )
           $headers = @{ Authorization = "Basic $base64Auth" }
 
-          # Fetch metadata XML to get latest version
-          $metaUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/maven-metadata.xml"
-          Write-Host "[INFO] Fetching latest version metadata from $metaUrl ..."
-          try {
-              [xml]$metaXml = Invoke-WebRequest -Uri $metaUrl -Headers $headers
-              $latestVersion = $metaXml.metadata.versioning.latest
-              Write-Host "[INFO] Latest full-repo version: $latestVersion"
-          }
-          catch {
-              Write-Host "[ERROR] Failed to fetch latest version from Nexus."
-              Write-Host $_.Exception.Message
+          # Fetch all full-repo components from Nexus
+          $apiUrl = "${env:NEXUS_URL}/service/rest/v1/search?repository=${env:NEXUS_REPO}&group=com.example.juiceshop&name=full-repo"
+          Write-Host "[INFO] Fetching available versions from $apiUrl ..."
+          $response = Invoke-RestMethod -Uri $apiUrl -Headers $headers -Method Get
+
+          if ($null -eq $response.items -or $response.items.Count -eq 0) {
+              Write-Host "[ERROR] No full-repo versions found in Nexus!"
               exit 1
           }
 
-          # Construct ZIP URL
-          $zipFileName = "full-repo-$latestVersion.zip"
-          $zipUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/$latestVersion/$zipFileName"
-          $zipFilePath = "$PWD\$zipFileName"
-          Write-Host "[INFO] Downloading latest ZIP: $zipUrl ..."
+          # Find the latest version by timestamp
+          $latest = $response.items | Sort-Object { $_.version } -Descending | Select-Object -First 1
+          $latestVersion = $latest.version
+          $zipDownloadUrl = $latest.assets[0].downloadUrl
 
-          try {
-              Invoke-WebRequest -Uri $zipUrl -OutFile $zipFilePath -Headers $headers
-              Write-Host "[INFO] ZIP downloaded to $zipFilePath"
+          Write-Host "[INFO] Latest version: $latestVersion"
+          Write-Host "[INFO] Download URL: $zipDownloadUrl"
+
+          # Ensure deployment folder exists
+          if (-Not (Test-Path $env:DEPLOY_PATH)) {
+              New-Item -ItemType Directory -Path $env:DEPLOY_PATH -Force | Out-Null
           }
-          catch {
-              Write-Host "[ERROR] Failed to download ZIP from Nexus."
-              Write-Host $_.Exception.Message
+
+          # Download ZIP
+          $zipFilePath = Join-Path $env:DEPLOY_PATH "full-repo-$latestVersion.zip"
+          Write-Host "[INFO] Downloading full repo ZIP to $zipFilePath ..."
+          Invoke-WebRequest -Uri $zipDownloadUrl -OutFile $zipFilePath -Headers $headers
+
+          if (-Not (Test-Path $zipFilePath)) {
+              Write-Host "[ERROR] Failed to download ZIP!"
               exit 1
           }
 
-          # Unzip to deployment path
-          if (-Not (Test-Path "${env:DEPLOY_PATH}")) {
-              Write-Host "[INFO] Creating deployment directory: ${env:DEPLOY_PATH}"
-              New-Item -ItemType Directory -Path "${env:DEPLOY_PATH}" | Out-Null
-          }
+          # Unzip
+          Write-Host "[INFO] Extracting ZIP to $env:DEPLOY_PATH ..."
+          Expand-Archive -Path $zipFilePath -DestinationPath $env:DEPLOY_PATH -Force
 
-          Write-Host "[INFO] Extracting ZIP to ${env:DEPLOY_PATH} ..."
-          Expand-Archive -Path $zipFilePath -DestinationPath "${env:DEPLOY_PATH}" -Force
-          Write-Host "[SUCCESS] Full-repo deployed successfully to ${env:DEPLOY_PATH}"
+          Write-Host "✅ Deployment completed successfully! Latest full-repo version: $latestVersion"
