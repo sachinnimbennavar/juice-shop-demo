@@ -1,84 +1,143 @@
-name: Run Juice Shop on IIS
+name: Juice Shop CI
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
 
 jobs:
-  deploy:
-    runs-on: windows-latest
+  build:
+    runs-on: self-hosted
 
     steps:
+      # 1️⃣ Checkout the repository
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v3
+      # 2️⃣ Set Node memory for server build
+      - name: Set Node memory
+        run: set NODE_OPTIONS=--max_old_space_size=4096
+
+      # 3️⃣ Cache frontend dependencies and Angular build output
+      - name: Cache frontend
+        uses: actions/cache@v3
         with:
-          node-version: 22
+          path: |
+            frontend/node_modules
+            frontend/dist
+            frontend/.angular
+          key: ${{ runner.os }}-frontend-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-frontend-
 
-      - name: Install IIS, URL Rewrite, and ARR
-        shell: powershell
+      # 4️⃣ Cache server dependencies
+      - name: Cache server
+        uses: actions/cache@v3
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-server-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-server-
+
+      # 5️⃣ Install frontend dependencies
+      - name: Install frontend dependencies
         run: |
-          Write-Host "[INFO] Installing IIS features..."
-          Enable-WindowsOptionalFeature -Online -FeatureName IIS-WebServerRole -All -NoRestart
-          Enable-WindowsOptionalFeature -Online -FeatureName IIS-WebServerManagementTools -All -NoRestart
-          Enable-WindowsOptionalFeature -Online -FeatureName IIS-ManagementConsole -All -NoRestart
+          cd frontend
+          npm install --legacy-peer-deps --prefer-offline --no-audit
+          cd ..
 
-          Write-Host "[INFO] Installing URL Rewrite and ARR if not present..."
-          $rewrite = "C:\temp\rewrite.msi"
-          $arr = "C:\temp\arr.msi"
-          New-Item -ItemType Directory -Force -Path "C:\temp" | Out-Null
-          Invoke-WebRequest -Uri "https://download.microsoft.com/download/D/3/4/D34A6B61-A034-4A25-8D8B-AE655B56B0D1/rewrite_amd64_en-US.msi" -OutFile $rewrite
-          Invoke-WebRequest -Uri "https://download.microsoft.com/download/8/5/A/85A8E7A9-3793-4D59-9B4E-3EE2C058CB9D/requestRouter_x64.msi" -OutFile $arr
-          Start-Process msiexec.exe -Wait -ArgumentList '/i', $rewrite, '/quiet', '/norestart'
-          Start-Process msiexec.exe -Wait -ArgumentList '/i', $arr, '/quiet', '/norestart'
-
-      - name: Install dependencies and build Juice Shop
-        shell: powershell
+      # 6️⃣ Build frontend
+      - name: Build frontend
         run: |
-          Write-Host "[INFO] Starting Juice Shop setup..."
-          cd "C:\Users\admin\Desktop\TESTING\juice-shop"
-          npm install --legacy-peer-deps
-          npm run build:frontend
-          Write-Host "[INFO] Juice Shop dependencies installed and frontend built."
+          cd frontend
+          npm run build -- --configuration production --watch=false --verbose
+          cd ..
 
-      - name: Start Juice Shop server
-        shell: powershell
+      # 7️⃣ Install server dependencies
+      - name: Install server dependencies
+        run: npm install --prefer-offline --no-audit
+
+      # 8️⃣ Build server
+      - name: Build server
+        run: npm run build:server
+
+      # 9️⃣ SonarQube analysis (optional)
+      - name: SonarQube Scan
         run: |
-          Write-Host "[INFO] Starting Juice Shop server..."
-          Start-Process -FilePath "npm" -ArgumentList "start" -WorkingDirectory "C:\Users\admin\Desktop\TESTING\juice-shop"
-          Start-Sleep -Seconds 10
-          Write-Host "[INFO] Juice Shop started on localhost:3000"
-
-      - name: Configure IIS Reverse Proxy
-        shell: powershell
-        run: |
-          Import-Module WebAdministration
-
-          $siteName = "JuiceShop"
-          $physicalPath = "C:\Users\admin\Desktop\TESTING\juice-shop"
-
-          # Remove if exists
-          if (Test-Path IIS:\Sites\$siteName) {
-            Remove-WebSite -Name $siteName
+          if (Get-Command sonar-scanner -ErrorAction SilentlyContinue) {
+              echo "Running SonarQube scanner..."
+              set SONAR_HOST_URL=http://127.0.0.1:9000
+              sonar-scanner
+          } else {
+              echo "sonar-scanner not found, skipping SonarQube analysis."
           }
 
-          New-WebSite -Name $siteName -Port 80 -PhysicalPath $physicalPath -Force
+      # 🔟 Full Repository ZIP + Nexus Upload Phase
+      - name: Create & Upload Full Repository ZIP to Nexus
+        shell: powershell
+        env:
+          NEXUS_URL: ${{ secrets.NEXUS_URL }}
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+        run: |
+          Write-Host "🧩 Creating full repository ZIP..."
+          $version = (Get-Date -Format "yyyyMMddHHmmss")
+          $repoZip = "full-repo-$version.zip"
+          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
+          $headers = @{ Authorization = "Basic $base64Auth" }
 
-          # Enable proxy
-          Set-WebConfigurationProperty -pspath 'MACHINE/WEBROOT/APPHOST' -filter "system.webServer/proxy" -name "enabled" -value "True"
+          # Ordered inclusion list
+          $itemsInOrder = @(
+              ".dependabot",".github",".gitlab",".well-known",".zap",
+              "build","logs","node_modules","config","data","encryptionkeys",
+              "frontend","ftp","i18n","lib","models","monitoring",
+              "routes","rsn","screenshots","test","uploads","vagrant","views",
+              ".codeclimate.yml",".devcontainer.json",".dockerignore",".eslintrc.js",
+              ".gitignore",".gitlab-ci.yml",".gitpod.yml",".mailmap",".npmrc",
+              "app.json","app.ts","CODE_OF_CONDUCT.md","config.schema.yml","CONTRIBUTING.md",
+              "crowdin.yaml","ctf.key","cypress.config.ts","docker-compose.test.yml","Dockerfile",
+              "Gruntfile.js","HALL_OF_FAME.md","LICENSE","package.json","README.md",
+              "REFERENCES.md","SECURITY.md","server.ts","SOLUTIONS.md","swagger.yml",
+              "threat-model.json","tsconfig.json"
+          )
 
-          # Create rewrite rule to forward to Node.js app
-          $configPath = "MACHINE/WEBROOT/APPHOST/$siteName"
-          Add-WebConfiguration -Filter "system.webServer/rewrite/rules/rule[@name='ReverseProxyRule']" -PSPath $configPath -Value @{
-              name='ReverseProxyRule'
-              enabled='true'
-              patternSyntax='Wildcard'
-              stopProcessing='true'
+          if (Test-Path $repoZip) { Remove-Item $repoZip -Force }
+
+          foreach ($item in $itemsInOrder) {
+              if (Test-Path $item) {
+                  if ($item -eq "node_modules") {
+                      $count = (Get-ChildItem node_modules -Recurse | Measure-Object).Count
+                      if ($count -gt 5000) {
+                          Write-Host "⚠️ Skipping node_modules (too large: $count items)..."
+                          continue
+                      }
+                  }
+                  Write-Host "Adding $item to ZIP..."
+                  Compress-Archive -Path $item -DestinationPath $repoZip -Update
+              } else {
+                  if ($item -in @("build","logs","node_modules")) {
+                      Write-Host "Creating empty folder $item..."
+                      New-Item -ItemType Directory -Path $item | Out-Null
+                      Compress-Archive -Path $item -DestinationPath $repoZip -Update
+                  }
+              }
           }
-          Add-WebConfigurationProperty -pspath $configPath -filter "system.webServer/rewrite/rules/rule[@name='ReverseProxyRule']/match" -name "." -value @{url='*'}
-          Add-WebConfigurationProperty -pspath $configPath -filter "system.webServer/rewrite/rules/rule[@name='ReverseProxyRule']/action" -name "." -value @{type='Rewrite';url='http://localhost:3000/{R:0}'}
 
-          Start-WebSite -Name $siteName
-          Write-Host "[SUCCESS] IIS reverse proxy configured. Juice Shop accessible at http://<server-ip>"
+          # Verify ZIP
+          $size = (Get-Item $repoZip).Length
+          Write-Host "[INFO] ZIP size: $size bytes"
+          if ($size -lt 100000) {
+              Write-Error "ZIP file too small. Likely incomplete!"
+              exit 1
+          }
 
+          Write-Host "✅ Full repo ZIP created: $repoZip"
+
+          # Upload to Nexus
+          $nexusTarget = "${env:NEXUS_URL}/repository/juice-shop/full-repo/$version/$repoZip"
+          Write-Host "⬆️ Uploading to Nexus → $nexusTarget"
+          Invoke-RestMethod -Uri $nexusTarget -Method Put -InFile $repoZip -Headers $headers -ContentType "application/zip"
+          Write-Host "✅ Full repository uploaded successfully."
