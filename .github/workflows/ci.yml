@@ -69,17 +69,6 @@ jobs:
       - name: Build server
         run: npm run build:server
 
-      # 9️⃣ Optional SonarQube analysis
-      - name: SonarQube Scan
-        run: |
-          if (Get-Command sonar-scanner -ErrorAction SilentlyContinue) {
-              echo "Running SonarQube scanner..."
-              set SONAR_HOST_URL=http://127.0.0.1:9000
-              sonar-scanner
-          } else {
-              echo "sonar-scanner not found, skipping SonarQube analysis."
-          }
-
       # 🔟 Create full repository ZIP & upload to Nexus
       - name: Create full repo ZIP and upload to Nexus
         shell: powershell
