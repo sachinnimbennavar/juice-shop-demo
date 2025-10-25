@@ -1,58 +1,79 @@
-name: Juice Shop Deployment
+name: Juice Shop ZIP & Nexus Upload (Complete, Verified)
 
 on:
-  workflow_dispatch:  # Manual trigger
+  workflow_dispatch:
 
 jobs:
-  deploy:
+  zip-and-upload:
     runs-on: self-hosted
 
-    env:
-      NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
-      DEPLOY_PATH: C:\SSDLC\Nexus_Unzips  # Destination path
-
     steps:
-      - name: 🧩 Checkout repository
+      # 1️⃣ Checkout repository (optimized)
+      - name: Checkout repository
         uses: actions/checkout@v3
+        with:
+          fetch-depth: 1               # Only latest commit
+          lfs: false                   # Skip LFS objects if not needed
+          submodules: false            # Skip submodules if not needed
 
-      - name: ⚙️ Setup PowerShell environment
-        shell: powershell
-        run: |
-          Write-Host "[INFO] Deployment job started..."
-          Write-Host "Working directory: $PWD"
-
-      - name: 🚀 Download & unzip latest full-repo from Nexus
+      # 2️⃣ Create full repo ZIP
+      - name: Create full repo ZIP
         shell: powershell
         env:
+          NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
-          Write-Host "[INFO] Starting deployment..."
-
-          # Prepare Basic Auth
-          $base64Auth = [System.Convert]::ToBase64String(
-              [System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}")
-          )
+          $version = (Get-Date -Format "yyyyMMddHHmmss")
+          $serverZip = "full-repo-$version.zip"
+          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
 
-          # Fetch Maven metadata to get latest version
-          $metaUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/maven-metadata.xml"
-          Write-Host "[INFO] Fetching latest version metadata from $metaUrl ..."
-          [xml]$metaXml = Invoke-WebRequest -Uri $metaUrl -Headers $headers
-          $latestVersion = $metaXml.metadata.versioning.latest
-          Write-Host "[INFO] Latest Nexus full-repo version: $latestVersion"
+          $itemsInOrder = @(
+              ".dependabot",".github",".gitlab",".well-known",".zap",
+              "build","logs","node_modules","config","data","encryptionkeys",
+              "frontend","ftp","i18n","lib","models","monitoring",
+              "routes","rsn","screenshots","test","uploads","vagrant","views",
+              ".codeclimate.yml",".devcontainer.json",".dockerignore",".eslintrc.js",
+              ".gitignore",".gitlab-ci.yml",".gitpod.yml",".mailmap",".npmrc",
+              "app.json","app.ts","CODE_OF_CONDUCT.md","config.schema.yml","CONTRIBUTING.md",
+              "crowdin.yaml","ctf.key","cypress.config.ts","docker-compose.test.yml","Dockerfile",
+              "Gruntfile.js","HALL_OF_FAME.md","LICENSE","package.json","README.md",
+              "REFERENCES.md","SECURITY.md","server.ts","SOLUTIONS.md","swagger.yml",
+              "threat-model.json","tsconfig.json"
+          )
 
-          # Construct ZIP URL and path
-          $zipFileName = "full-repo-$latestVersion.zip"
-          $zipUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/$latestVersion/$zipFileName"
-          $zipFilePath = Join-Path $env:DEPLOY_PATH $zipFileName
+          if (Test-Path $serverZip) { Remove-Item $serverZip -Force }
 
-          # Ensure destination folder exists
-          if (!(Test-Path $env:DEPLOY_PATH)) { New-Item -ItemType Directory -Path $env:DEPLOY_PATH }
+          foreach ($item in $itemsInOrder) {
+              if (Test-Path $item) {
+                  if ($item -eq "node_modules") {
+                      $count = (Get-ChildItem node_modules -Recurse | Measure-Object).Count
+                      if ($count -gt 5000) {
+                          Write-Host "⚠️ Skipping node_modules folder to save time (contains $count items)..."
+                          continue
+                      }
+                  }
+                  Write-Host "Adding $item to ZIP..."
+                  Compress-Archive -Path $item -DestinationPath $serverZip -Update
+              } else {
+                  if ($item -in @("build","logs","node_modules")) {
+                      Write-Host "Creating empty folder $item..."
+                      New-Item -ItemType Directory -Path $item
+                      Compress-Archive -Path $item -DestinationPath $serverZip -Update
+                  }
+              }
+          }
 
-          # Download and unzip
-          Write-Host "[INFO] Downloading full repo ZIP from Nexus: $zipUrl ..."
-          Invoke-WebRequest -Uri $zipUrl -OutFile $zipFilePath -Headers $headers
-          Write-Host "[INFO] Extracting ZIP to $env:DEPLOY_PATH ..."
-          Expand-Archive -Path $zipFilePath -DestinationPath $env:DEPLOY_PATH -Force
-          Write-Host "[SUCCESS] Deployment completed successfully!"
+          $size = (Get-Item $serverZip).Length
+          Write-Host "[INFO] ZIP file size: $size bytes"
+          if ($size -lt 100000) {
+              Write-Error "ZIP file size too small. Likely incomplete!"
+              exit 1
+          }
+          Write-Host "✅ Full repo ZIP created: $serverZip"
+
+          $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/$version/$serverZip"
+          Write-Host "⬆️ Uploading to Nexus → $serverUrl"
+          Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $serverZip -Headers $headers -ContentType "application/zip"
+          Write-Host "✅ Full repo uploaded successfully."
