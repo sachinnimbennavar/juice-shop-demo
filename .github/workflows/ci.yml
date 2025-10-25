@@ -1,76 +1,46 @@
-name: Juice Shop Deployment
+name: Juice Shop Deployment - Unzip Only
 
 on:
-  workflow_dispatch:  # Manual trigger only
+  workflow_dispatch:
 
 jobs:
-  deploy-latest-zip:
+  deploy:
     runs-on: self-hosted
 
     env:
-      NEXUS_URL: http://127.0.0.1:8081
-      NEXUS_REPO: JuiceShopMavenDemo
-      DEPLOY_PATH: C:\SSDLC\Nexus_Unzips
+      ZIP_SOURCE_PATH: C:\SSDLC\Nexus_Zips   # path where the latest ZIP exists
+      UNZIP_PATH: C:\SSDLC\Nexus_Unzips
 
     steps:
-      # 1️⃣ Checkout repository
-      - name: Checkout repository
-        uses: actions/checkout@v3
-        with:
-          fetch-depth: 1
-          lfs: false
-          submodules: false
-
-      # 2️⃣ Deploy latest Nexus ZIP
-      - name: Download & Unzip latest full-repo ZIP from Nexus
+      - name: ⚙️ Setup PowerShell environment
         shell: powershell
-        env:
-          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
-          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
-          Write-Host "[INFO] Starting deployment..."
+          Write-Host "[INFO] Deployment job started..."
+          Write-Host "Working directory: $PWD"
 
-          # Prepare Basic Auth
-          $base64Auth = [System.Convert]::ToBase64String(
-              [System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}")
-          )
-          $headers = @{ Authorization = "Basic $base64Auth" }
+      - name: 🚀 Clean and unzip full repo
+        shell: powershell
+        run: |
+          # Find the latest ZIP file in ZIP_SOURCE_PATH
+          $latestZip = Get-ChildItem -Path $env:ZIP_SOURCE_PATH -Filter "full-repo-*.zip" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 
-          # Fetch all full-repo components from Nexus
-          $apiUrl = "${env:NEXUS_URL}/service/rest/v1/search?repository=${env:NEXUS_REPO}&group=com.example.juiceshop&name=full-repo"
-          Write-Host "[INFO] Fetching available versions from $apiUrl ..."
-          $response = Invoke-RestMethod -Uri $apiUrl -Headers $headers -Method Get
-
-          if ($null -eq $response.items -or $response.items.Count -eq 0) {
-              Write-Host "[ERROR] No full-repo versions found in Nexus!"
+          if (-not $latestZip) {
+              Write-Host "[ERROR] No ZIP file found in $env:ZIP_SOURCE_PATH"
               exit 1
           }
 
-          # Find the latest version by timestamp
-          $latest = $response.items | Sort-Object { $_.version } -Descending | Select-Object -First 1
-          $latestVersion = $latest.version
-          $zipDownloadUrl = $latest.assets[0].downloadUrl
+          Write-Host "[INFO] Latest ZIP found: $($latestZip.FullName)"
 
-          Write-Host "[INFO] Latest version: $latestVersion"
-          Write-Host "[INFO] Download URL: $zipDownloadUrl"
-
-          # Ensure deployment folder exists
-          if (-Not (Test-Path $env:DEPLOY_PATH)) {
-              New-Item -ItemType Directory -Path $env:DEPLOY_PATH -Force | Out-Null
+          # Clean the unzip path
+          if (Test-Path $env:UNZIP_PATH) {
+              Write-Host "[INFO] Cleaning existing folder: $env:UNZIP_PATH ..."
+              Remove-Item -Path "$env:UNZIP_PATH\*" -Recurse -Force
+          } else {
+              Write-Host "[INFO] Creating folder: $env:UNZIP_PATH ..."
+              New-Item -ItemType Directory -Path $env:UNZIP_PATH
           }
 
-          # Download ZIP
-          $zipFilePath = Join-Path $env:DEPLOY_PATH "full-repo-$latestVersion.zip"
-          Write-Host "[INFO] Downloading full repo ZIP to $zipFilePath ..."
-          Invoke-WebRequest -Uri $zipDownloadUrl -OutFile $zipFilePath -Headers $headers
-
-          if (-Not (Test-Path $zipFilePath)) {
-              Write-Host "[ERROR] Failed to download ZIP!"
-              exit 1
-          }
-
-          # Unzip
-          Write-Host "[INFO] Extracting ZIP to $env:DEPLOY_PATH ..."
-          Expand-Archive -Path $zipFilePath -DestinationPath $env:DEPLOY_PATH -Force
-
-          Write-Host "✅ Deployment completed successfully! Latest full-repo version: $latestVersion"
+          # Unzip latest ZIP directly
+          Write-Host "[INFO] Extracting $($latestZip.FullName) to $env:UNZIP_PATH ..."
+          Expand-Archive -Path $latestZip.FullName -DestinationPath $env:UNZIP_PATH -Force
+          Write-Host "[SUCCESS] Full repo unzipped successfully!"
