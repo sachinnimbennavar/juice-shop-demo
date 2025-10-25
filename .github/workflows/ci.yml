@@ -1,76 +1,176 @@
-name: Juice Shop Deployment
+name: Juice Shop CI
 
 on:
-  workflow_dispatch:  # Manual trigger only
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
 
 jobs:
-  deploy:
+  build:
     runs-on: self-hosted
 
-    env:
-      NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
-      DEPLOY_PATH_FRONTEND: C:\JuiceShopServer\frontend  # safer path for frontend
-      DEPLOY_PATH_SERVER: C:\JuiceShopServer
-
     steps:
-      - name: 🧩 Checkout code
+      # 1️⃣ Checkout repository
+      - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: ⚙️ Setup PowerShell environment
-        shell: powershell
+      # 2️⃣ Set Node memory
+      - name: Set Node memory
+        run: set NODE_OPTIONS=--max_old_space_size=4096
+
+      # 3️⃣ Cache frontend dependencies and Angular build output
+      - name: Cache frontend
+        uses: actions/cache@v3
+        with:
+          path: |
+            frontend/node_modules
+            frontend/dist
+            frontend/.angular
+          key: ${{ runner.os }}-frontend-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-frontend-
+
+      # 4️⃣ Cache server dependencies
+      - name: Cache server
+        uses: actions/cache@v3
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-server-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-server-
+
+      # 5️⃣ Install frontend dependencies
+      - name: Install frontend dependencies
         run: |
-          Write-Host "[INFO] Deployment job started..."
-          Write-Host "Working directory: $PWD"
-      - name: 🚀 Deploy from Nexus
+          cd frontend
+          npm install --legacy-peer-deps --prefer-offline --no-audit
+          cd ..
+
+      # 6️⃣ Build frontend
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm run build -- --configuration production --watch=false --verbose
+          cd ..
+
+      # 7️⃣ Install server dependencies
+      - name: Install server dependencies
+        run: npm install --prefer-offline --no-audit
+
+      # 8️⃣ Build server
+      - name: Build server
+        run: npm run build:server
+
+      # 9️⃣ SonarQube analysis (optional)
+      - name: SonarQube Scan
+        run: |
+          if (Get-Command sonar-scanner -ErrorAction SilentlyContinue) {
+              echo "Running SonarQube scanner..."
+              set SONAR_HOST_URL=http://127.0.0.1:9000
+              sonar-scanner
+          } else {
+              echo "sonar-scanner not found, skipping SonarQube analysis."
+          }
+
+      # 🔟 ZIP + Nexus Upload (100% Verified Version)
+      - name: Create full repo ZIP and upload to Nexus
         shell: powershell
         env:
+          NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
-          BUILD_VERSION: 20251022135017  # latest version from Nexus
         run: |
-          Write-Host "[INFO] Starting deployment..."
-          
-          # Prepare Basic Auth
+          $version = (Get-Date -Format "yyyyMMddHHmmss")
+          $serverZip = "full-repo-$version.zip"
+          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
+          $headers = @{ Authorization = "Basic $base64Auth" }
+
+          $itemsInOrder = @(
+              ".dependabot",".github",".gitlab",".well-known",".zap",
+              "build","logs","node_modules","config","data","encryptionkeys",
+              "frontend","ftp","i18n","lib","models","monitoring",
+              "routes","rsn","screenshots","test","uploads","vagrant","views",
+              ".codeclimate.yml",".devcontainer.json",".dockerignore",".eslintrc.js",
+              ".gitignore",".gitlab-ci.yml",".gitpod.yml",".mailmap",".npmrc",
+              "app.json","app.ts","CODE_OF_CONDUCT.md","config.schema.yml","CONTRIBUTING.md",
+              "crowdin.yaml","ctf.key","cypress.config.ts","docker-compose.test.yml","Dockerfile",
+              "Gruntfile.js","HALL_OF_FAME.md","LICENSE","package.json","README.md",
+              "REFERENCES.md","SECURITY.md","server.ts","SOLUTIONS.md","swagger.yml",
+              "threat-model.json","tsconfig.json"
+          )
+
+          if (Test-Path $serverZip) { Remove-Item $serverZip -Force }
+
+          foreach ($item in $itemsInOrder) {
+              if (Test-Path $item) {
+                  if ($item -eq "node_modules") {
+                      $count = (Get-ChildItem node_modules -Recurse | Measure-Object).Count
+                      if ($count -gt 5000) {
+                          Write-Host "⚠️ Skipping node_modules folder to save time (contains $count items)..."
+                          continue
+                      }
+                  }
+                  Write-Host "Adding $item to ZIP..."
+                  Compress-Archive -Path $item -DestinationPath $serverZip -Update
+              } else {
+                  if ($item -in @("build","logs","node_modules")) {
+                      Write-Host "Creating empty folder $item..."
+                      New-Item -ItemType Directory -Path $item | Out-Null
+                      Compress-Archive -Path $item -DestinationPath $serverZip -Update
+                  }
+              }
+          }
+
+          $size = (Get-Item $serverZip).Length
+          Write-Host "[INFO] ZIP file size: $size bytes"
+          if ($size -lt 100000) {
+              Write-Error "ZIP file size too small. Likely incomplete!"
+              exit 1
+          }
+
+          Write-Host "✅ Full repo ZIP created: $serverZip"
+          $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/$version/$serverZip"
+          Write-Host "⬆️ Uploading to Nexus → $serverUrl"
+          Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $serverZip -Headers $headers -ContentType "application/zip"
+          Write-Host "✅ Full repo uploaded successfully."
+
+          # Save version for next step
+          echo "ZIP_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      # 🔁 Download latest uploaded ZIP and unzip to C:\SSDLC\Nexus_Unzips
+      - name: Download and extract latest ZIP from Nexus
+        shell: powershell
+        env:
+          NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+          ZIP_VERSION: ${{ env.ZIP_VERSION }}
+        run: |
           $base64Auth = [System.Convert]::ToBase64String(
               [System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}")
           )
           $headers = @{ Authorization = "Basic $base64Auth" }
-          # === FRONTEND DEPLOYMENT ===
-          try {
-              $frontendUrl = "${env:NEXUS_URL}/com/example/juiceshop/frontend-build/$env:BUILD_VERSION/frontend-build-$env:BUILD_VERSION.zip"
-              Write-Host "[INFO] Downloading frontend from $frontendUrl ..."
-              Invoke-WebRequest -Uri $frontendUrl -OutFile "frontend.zip" -Headers $headers
-              if (Test-Path "frontend.zip") {
-                  Write-Host "[INFO] Extracting frontend to ${env:DEPLOY_PATH_FRONTEND} ..."
-                  Expand-Archive -Path "frontend.zip" -DestinationPath "${env:DEPLOY_PATH_FRONTEND}" -Force
-                  Write-Host "[SUCCESS] Frontend deployed successfully."
-              } else {
-                  Write-Host "[ERROR] Frontend ZIP not downloaded."
-                  exit 1
-              }
-          }
-          catch {
-              Write-Host "[ERROR] Failed to download frontend ZIP from Nexus."
-              Write-Host $_.Exception.Message
+
+          $downloadDir = "C:\SSDLC\Nexus_Unzips"
+          if (!(Test-Path $downloadDir)) { New-Item -ItemType Directory -Path $downloadDir | Out-Null }
+
+          $zipFile = "full-repo-$env:ZIP_VERSION.zip"
+          $nexusZipUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/$env:ZIP_VERSION/$zipFile"
+
+          Write-Host "[INFO] Downloading latest ZIP from $nexusZipUrl..."
+          Invoke-WebRequest -Uri $nexusZipUrl -OutFile "$downloadDir\$zipFile" -Headers $headers
+
+          if (Test-Path "$downloadDir\$zipFile") {
+              Write-Host "[INFO] Extracting to $downloadDir ..."
+              Expand-Archive -Path "$downloadDir\$zipFile" -DestinationPath "$downloadDir\full-repo-$env:ZIP_VERSION" -Force
+              Write-Host "✅ Extraction completed at $downloadDir\full-repo-$env:ZIP_VERSION"
+          } else {
+              Write-Error "❌ ZIP download failed from Nexus."
               exit 1
           }
-          # === SERVER DEPLOYMENT ===
-          try {
-              $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/server-build/$env:BUILD_VERSION/server-build-$env:BUILD_VERSION.zip"
-              Write-Host "[INFO] Downloading server from $serverUrl ..."
-              Invoke-WebRequest -Uri $serverUrl -OutFile "server.zip" -Headers $headers
-              if (Test-Path "server.zip") {
-                  Write-Host "[INFO] Extracting server to ${env:DEPLOY_PATH_SERVER} ..."
-                  Expand-Archive -Path "server.zip" -DestinationPath "${env:DEPLOY_PATH_SERVER}" -Force
-                  Write-Host "[SUCCESS] Server deployed successfully."
-              } else {
-                  Write-Host "[ERROR] Server ZIP not downloaded."
-                  exit 1
-              }
-          }
-          catch {
-              Write-Host "[ERROR] Failed to download server ZIP from Nexus."
-              Write-Host $_.Exception.Message
-              exit 1
-          }
-          Write-Host "✅ Deployment completed successfully!"
+
+      - name: ✅ Pipeline completed
+        run: echo "🎉 Juice Shop CI/CD pipeline completed successfully!"
