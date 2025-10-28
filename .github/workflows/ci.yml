@@ -1,13 +1,13 @@
 name: Juice Shop CI/CD Deployment
 
 on:
-  workflow_dispatch: # allows manual trigger
+  workflow_dispatch:  # manual trigger
 
 jobs:
   deploy:
     runs-on: self-hosted
     steps:
-      # 1️⃣ Checkout repository (optional)
+      # 1️⃣ Checkout repo (optional)
       - name: Checkout repository
         uses: actions/checkout@v3
 
@@ -22,7 +22,7 @@ jobs:
           Copy-Item -Path $source -Destination $destination -Recurse
 
       # 3️⃣ Install Node.js dependencies
-      - name: Install dependencies
+      - name: Install Node.js dependencies
         run: |
           Write-Output "Installing Node.js dependencies..."
           cd C:\inetpub\wwwroot\JuiceShop
@@ -63,7 +63,7 @@ jobs:
           Stop-Website -Name "JuiceShop"
           Start-Website -Name "JuiceShop"
 
-      # 6️⃣ Confirm deployment
+      # 6️⃣ Deployment confirmation
       - name: Deployment Complete
         run: |
           Write-Output "Juice Shop deployment completed successfully!"
