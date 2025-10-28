@@ -1,16 +1,13 @@
 name: Juice Shop CI/CD Deployment
 
 on:
-  workflow_dispatch: # manual trigger
-  push:
-    branches:
-      - main
+  workflow_dispatch: # allows manual trigger
 
 jobs:
   deploy:
     runs-on: self-hosted
     steps:
-      # 1️⃣ Checkout repository (optional if pipeline triggers after Nexus download)
+      # 1️⃣ Checkout repository (optional)
       - name: Checkout repository
         uses: actions/checkout@v3
 
@@ -19,12 +16,15 @@ jobs:
         run: |
           $source = "C:\SSDLC\Nexus_Unzips\*"
           $destination = "C:\inetpub\wwwroot\JuiceShop"
+          Write-Output "Clearing IIS deployment folder..."
           Remove-Item -Recurse -Force $destination\*
+          Write-Output "Copying latest files from Nexus unzips..."
           Copy-Item -Path $source -Destination $destination -Recurse
 
       # 3️⃣ Install Node.js dependencies
       - name: Install dependencies
         run: |
+          Write-Output "Installing Node.js dependencies..."
           cd C:\inetpub\wwwroot\JuiceShop
           npm install
 
@@ -33,6 +33,7 @@ jobs:
         run: |
           $webConfigPath = "C:\inetpub\wwwroot\JuiceShop\web.config"
           if (!(Test-Path $webConfigPath)) {
+              Write-Output "Creating web.config..."
               $webConfig = @"
 <configuration>
   <system.webServer>
@@ -50,16 +51,20 @@ jobs:
 </configuration>
 "@
               $webConfig | Out-File -FilePath $webConfigPath -Encoding UTF8
+          } else {
+              Write-Output "web.config already exists."
           }
 
       # 5️⃣ Restart IIS site
       - name: Restart IIS Site
         run: |
+          Write-Output "Restarting IIS site..."
           Import-Module WebAdministration
           Stop-Website -Name "JuiceShop"
           Start-Website -Name "JuiceShop"
 
-      # 6️⃣ Confirm site is running
-      - name: Test IIS Site
+      # 6️⃣ Confirm deployment
+      - name: Deployment Complete
         run: |
-          Write-Output "Juice Shop deployment completed. Open http://localhost:3000 to verify."
+          Write-Output "Juice Shop deployment completed successfully!"
+          Write-Output "Access the site at: http://localhost:3000"
