@@ -14,21 +14,25 @@ jobs:
         with:
           fetch-depth: 1
 
-      # 2️⃣ Install frontend dependencies
+      # 2️⃣ Set Node memory limit
+      - name: Increase Node memory
+        run: setx NODE_OPTIONS "--max_old_space_size=4096"
+
+      # 3️⃣ Install frontend dependencies
       - name: Install frontend dependencies
         run: |
           cd frontend
           npm install --legacy-peer-deps --prefer-offline --no-audit
           cd ..
 
-      # 3️⃣ Build frontend
+      # 4️⃣ Build frontend
       - name: Build frontend
         run: |
           cd frontend
-          npm run build -- --configuration production --watch=false --verbose
+          npm run build -- --watch=false --verbose
           cd ..
 
-      # 4️⃣ IIS Deployment (frontend only)
+      # 5️⃣ IIS Deployment (frontend only)
       - name: IIS Frontend Deployment
         shell: powershell
         env:
@@ -44,21 +48,21 @@ jobs:
               exit 1
           }
 
-          # Stop existing IIS site if exists
+          # Stop IIS site if it exists
           $site = Get-Website -Name $env:SITE_NAME -ErrorAction SilentlyContinue
           if ($null -ne $site) { Stop-Website -Name $env:SITE_NAME }
 
-          # Clear or create IIS path
+          # Clear or create IIS folder
           if (Test-Path $env:IIS_PATH) {
               Get-ChildItem $env:IIS_PATH -Recurse -Force | Remove-Item -Force -Recurse
           } else {
               New-Item -ItemType Directory -Path $env:IIS_PATH -Force | Out-Null
           }
 
-          # Copy build output to IIS
+          # Copy frontend build to IIS
           Copy-Item -Path (Join-Path $env:BUILD_PATH '*') -Destination $env:IIS_PATH -Recurse -Force
 
-          # Start or create the site
+          # Start or create IIS site
           $site = Get-Website -Name $env:SITE_NAME -ErrorAction SilentlyContinue
           if ($null -ne $site) {
               Start-Website -Name $env:SITE_NAME
@@ -68,7 +72,7 @@ jobs:
 
           Write-Host "✅ Frontend deployed to IIS successfully."
 
-      # 5️⃣ Run Node.js server as Windows service
+      # 6️⃣ Run Node.js server as Windows service
       - name: Node.js Server as Windows Service
         shell: powershell
         env:
