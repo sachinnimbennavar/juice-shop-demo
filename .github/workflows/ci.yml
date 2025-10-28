@@ -76,7 +76,6 @@ jobs:
           Write-Host "⬆️ Uploading to Nexus → $serverUrl"
           Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $serverZip -Headers $headers -ContentType "application/zip"
           Write-Host "✅ Full repo uploaded successfully."
-
       # 3️⃣ Set Node memory for server build
       - name: Set Node memory
         run: set NODE_OPTIONS=--max_old_space_size=4096
@@ -92,7 +91,6 @@ jobs:
           key: ${{ runner.os }}-frontend-${{ hashFiles('frontend/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-frontend-
-
       # 5️⃣ Cache server dependencies
       - name: Cache server
         uses: actions/cache@v3
@@ -101,21 +99,18 @@ jobs:
           key: ${{ runner.os }}-server-${{ hashFiles('package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-server-
-
       # 6️⃣ Install frontend dependencies
       - name: Install frontend dependencies
         run: |
           cd frontend
           npm install --legacy-peer-deps --prefer-offline --no-audit
           cd ..
-
       # 7️⃣ Build frontend
       - name: Build frontend
         run: |
           cd frontend
           npm run build -- --configuration production --watch=false --verbose
           cd ..
-
       # 8️⃣ Install server dependencies
       - name: Install server dependencies
         run: npm install --prefer-offline --no-audit
@@ -173,18 +168,3 @@ jobs:
           Write-Host "[INFO] Extracting ZIP to $env:DEPLOY_PATH ..."
           Expand-Archive -Path $zipFilePath -DestinationPath $env:DEPLOY_PATH -Force
           Write-Host "✅ Deployment completed successfully! Latest full-repo version: $latestVersion"
-
-      # 12️⃣ Additional Post-Deployment Step
-      - name: Additional Post-Deployment Step
-        shell: powershell
-        run: |
-          Write-Host "[INFO] Running additional post-deployment tasks..."
-          # Example: List all files in deployment folder
-          $deployPath = "C:\SSDLC\Nexus_Unzips"
-          if (Test-Path $deployPath) {
-              Write-Host "[INFO] Listing contents of $deployPath ..."
-              Get-ChildItem -Path $deployPath -Recurse | ForEach-Object { Write-Host $_.FullName }
-          } else {
-              Write-Host "[WARN] Deployment folder does not exist."
-          }
-          Write-Host "✅ Additional step completed."
