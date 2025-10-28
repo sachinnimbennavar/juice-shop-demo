@@ -1,4 +1,4 @@
-name: Juice Shop Full Deployment
+name: Juice Shop IIS Deployment
 
 on:
   workflow_dispatch:
@@ -33,24 +33,38 @@ jobs:
         shell: powershell
         env:
           SITE_NAME: JuiceShopSite
-          BUILD_PATH: C:\SSDLC\Nexus_Unzips\frontend\dist
+          BUILD_PATH: frontend/dist
           IIS_PATH: C:\inetpub\wwwroot\JuiceShop
         run: |
           Import-Module WebAdministration -ErrorAction Stop
 
-          # Stop IIS site if exists
+          Write-Host "[INFO] Starting IIS frontend deployment..."
+          if (-Not (Test-Path $env:BUILD_PATH)) {
+              Write-Error "[ERROR] Frontend build path '$env:BUILD_PATH' not found!"
+              exit 1
+          }
+
+          # Stop existing IIS site if exists
           $site = Get-Website -Name $env:SITE_NAME -ErrorAction SilentlyContinue
           if ($null -ne $site) { Stop-Website -Name $env:SITE_NAME }
 
-          # Clear IIS directory or create
-          if (Test-Path $env:IIS_PATH) { Get-ChildItem $env:IIS_PATH -Recurse -Force | Remove-Item -Force -Recurse } else { New-Item -ItemType Directory -Path $env:IIS_PATH -Force | Out-Null }
+          # Clear or create IIS path
+          if (Test-Path $env:IIS_PATH) {
+              Get-ChildItem $env:IIS_PATH -Recurse -Force | Remove-Item -Force -Recurse
+          } else {
+              New-Item -ItemType Directory -Path $env:IIS_PATH -Force | Out-Null
+          }
 
-          # Copy only frontend build
+          # Copy build output to IIS
           Copy-Item -Path (Join-Path $env:BUILD_PATH '*') -Destination $env:IIS_PATH -Recurse -Force
 
-          # Start IIS site or create
+          # Start or create the site
           $site = Get-Website -Name $env:SITE_NAME -ErrorAction SilentlyContinue
-          if ($null -ne $site) { Start-Website -Name $env:SITE_NAME } else { New-Website -Name $env:SITE_NAME -Port 8080 -PhysicalPath $env:IIS_PATH -Force | Out-Null }
+          if ($null -ne $site) {
+              Start-Website -Name $env:SITE_NAME
+          } else {
+              New-Website -Name $env:SITE_NAME -Port 8080 -PhysicalPath $env:IIS_PATH -Force | Out-Null
+          }
 
           Write-Host "✅ Frontend deployed to IIS successfully."
 
@@ -61,17 +75,20 @@ jobs:
           SERVER_PATH: C:\SSDLC\Nexus_Unzips
           SERVICE_NAME: JuiceShopServer
         run: |
-          # Check if service exists
+          Write-Host "[INFO] Starting Node.js server service..."
           $service = Get-Service -Name $env:SERVICE_NAME -ErrorAction SilentlyContinue
+          $nodePath = (Get-Command node).Source
+          $appPath = Join-Path $env:SERVER_PATH "server.js"
+
+          if (-Not (Test-Path $appPath)) {
+              Write-Error "[ERROR] server.js not found at $appPath"
+              exit 1
+          }
+
           if ($null -eq $service) {
-              # Create a new service using NSSM or sc.exe
               Write-Host "Creating Windows service $($env:SERVICE_NAME)..."
-              $nodePath = (Get-Command node).Source
-              $appPath = Join-Path $env:SERVER_PATH "server.js"
-              # Using sc.exe (built-in)
               sc.exe create $env:SERVICE_NAME binPath= "`"$nodePath`" `"$appPath`"" start= auto
           }
 
-          # Start or restart the service
           Restart-Service -Name $env:SERVICE_NAME -Force
           Write-Host "✅ Node.js server running as Windows service."
