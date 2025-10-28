@@ -1,35 +1,57 @@
-- name: IIS Deployment
-  if: ${{ github.event_name == 'workflow_dispatch' }}
-  shell: powershell
-  env:
-    SITE_NAME: JuiceShopSite
-    DEPLOY_PATH: C:\SSDLC\Nexus_Unzips
-    IIS_PATH: C:\inetpub\wwwroot\JuiceShop
-  run: |
-    Import-Module WebAdministration -ErrorAction Stop
+name: IIS Deployment Only
 
-    # Stop IIS site if it exists
-    $site = Get-Website -Name $env:SITE_NAME -ErrorAction SilentlyContinue
-    if ($null -ne $site) {
-        Stop-Website -Name $env:SITE_NAME
-    }
+on:
+  workflow_dispatch:
 
-    # Clear IIS directory or create it if missing
-    if (Test-Path $env:IIS_PATH) {
-        Get-ChildItem $env:IIS_PATH -Recurse -Force | Remove-Item -Force -Recurse
-    } else {
-        New-Item -ItemType Directory -Path $env:IIS_PATH -Force | Out-Null
-    }
+jobs:
+  iis-deploy:
+    runs-on: self-hosted
 
-    # Copy files from deployment folder
-    Copy-Item -Path (Join-Path $env:DEPLOY_PATH '*') -Destination $env:IIS_PATH -Recurse -Force
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 1
 
-    # Start IIS site or create if missing
-    $site = Get-Website -Name $env:SITE_NAME -ErrorAction SilentlyContinue
-    if ($null -ne $site) {
-        Start-Website -Name $env:SITE_NAME
-    } else {
-        New-Website -Name $env:SITE_NAME -Port 8080 -PhysicalPath $env:IIS_PATH -Force | Out-Null
-    }
+      - name: IIS Deployment
+        shell: powershell
+        env:
+          SITE_NAME: JuiceShopSite
+          DEPLOY_PATH: C:\SSDLC\Nexus_Unzips
+          IIS_PATH: C:\inetpub\wwwroot\JuiceShop
+        run: |
+          Write-Host "[INFO] Starting IIS Deployment..."
 
-    Write-Host "IIS deployment completed successfully."
+          Import-Module WebAdministration -ErrorAction Stop
+
+          # Stop IIS site if it exists
+          $site = Get-Website -Name $env:SITE_NAME -ErrorAction SilentlyContinue
+          if ($null -ne $site) {
+              Write-Host "[INFO] Stopping IIS site $($env:SITE_NAME)..."
+              Stop-Website -Name $env:SITE_NAME
+          }
+
+          # Clear IIS directory or create if missing
+          if (Test-Path $env:IIS_PATH) {
+              Write-Host "[INFO] Clearing existing files from $($env:IIS_PATH)..."
+              Get-ChildItem $env:IIS_PATH -Recurse -Force | Remove-Item -Force -Recurse
+          } else {
+              Write-Host "[INFO] Creating IIS directory $($env:IIS_PATH)..."
+              New-Item -ItemType Directory -Path $env:IIS_PATH -Force | Out-Null
+          }
+
+          # Copy files from deployment folder
+          Write-Host "[INFO] Copying files from $($env:DEPLOY_PATH) to $($env:IIS_PATH)..."
+          Copy-Item -Path (Join-Path $env:DEPLOY_PATH '*') -Destination $env:IIS_PATH -Recurse -Force
+
+          # Start IIS site or create if missing
+          $site = Get-Website -Name $env:SITE_NAME -ErrorAction SilentlyContinue
+          if ($null -ne $site) {
+              Write-Host "[INFO] Starting IIS site $($env:SITE_NAME)..."
+              Start-Website -Name $env:SITE_NAME
+          } else {
+              Write-Host "[INFO] Creating IIS site $($env:SITE_NAME) on port 8080..."
+              New-Website -Name $env:SITE_NAME -Port 8080 -PhysicalPath $env:IIS_PATH -Force | Out-Null
+          }
+
+          Write-Host "[INFO] IIS deployment completed successfully."
