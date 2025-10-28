@@ -1,7 +1,7 @@
 name: Juice Shop CI/CD Deployment
 
 on:
-  workflow_dispatch:  # manual trigger
+  workflow_dispatch:  # allows manual trigger
 
 jobs:
   deploy:
