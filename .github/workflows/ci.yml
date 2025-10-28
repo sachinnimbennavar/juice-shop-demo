@@ -6,8 +6,9 @@ on:
 jobs:
   deploy:
     runs-on: self-hosted
+
     steps:
-      # 1️⃣ Checkout repo (optional)
+      # 1️⃣ Checkout repository (optional)
       - name: Checkout repository
         uses: actions/checkout@v3
 
