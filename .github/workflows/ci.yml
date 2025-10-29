@@ -5,11 +5,8 @@ on:
 
 jobs:
   deploy-latest-zip:
-    runs-on: windows-latest  # Since you're using PowerShell and IIS paths
+    runs-on: self-hosted  # your machine where Nexus is accessible
     steps:
-      - name: Checkout Repo
-        uses: actions/checkout@v3
-
       - name: Juice Shop Deployment
         shell: powershell
         env:
