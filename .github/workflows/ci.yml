@@ -9,7 +9,7 @@ jobs:
     runs-on: self-hosted  # Windows machine with IIS + ARR + iisnode
 
     steps:
-      # 1️⃣ Set environment variables
+      # 1️⃣ Set environment paths
       - name: Set Paths and URLs
         shell: powershell
         run: |
@@ -19,7 +19,7 @@ jobs:
           $env:BACKEND_IIS_PATH = "C:\inetpub\wwwroot\JuiceShopBackend"
           $env:BACKEND_URL = "http://localhost/JuiceShopBackend"
 
-      # 2️⃣ Deploy frontend to IIS
+      # 2️⃣ Deploy frontend
       - name: Deploy Frontend
         shell: powershell
         run: |
@@ -28,14 +28,14 @@ jobs:
           Remove-Item -Path "$env:FRONTEND_IIS_PATH\*" -Recurse -Force -ErrorAction SilentlyContinue
           Copy-Item -Path "$env:FRONTEND_SOURCE\*" -Destination $env:FRONTEND_IIS_PATH -Recurse
 
-          # Update API URL in frontend environment file
+          # Update frontend API URL
           $envFile = Join-Path $env:FRONTEND_IIS_PATH "assets\environment.prod.js"
           if (Test-Path $envFile) {
               (Get-Content $envFile) -replace 'apiUrl\s*:\s*["\'].*["\']', "apiUrl: '$env:BACKEND_URL'" | Set-Content $envFile
-              Write-Host "[INFO] Frontend API URL updated."
+              Write-Host "[INFO] Frontend API URL updated to $env:BACKEND_URL"
           }
 
-          # Create Angular web.config for HTML5 routing
+          # Create Angular web.config for routing
           $webConfigPath = Join-Path $env:FRONTEND_IIS_PATH "web.config"
           @"
 <configuration>
@@ -57,7 +57,7 @@ jobs:
 "@ | Out-File -FilePath $webConfigPath -Encoding UTF8
           Write-Host "[INFO] Frontend deployed successfully."
 
-      # 3️⃣ Deploy backend to IIS
+      # 3️⃣ Deploy backend
       - name: Deploy Backend
         shell: powershell
         run: |
