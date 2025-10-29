@@ -1,72 +1,73 @@
-name: Juice Shop IIS Deployment
+name: Juice Shop CI/CD Full Pipeline with Service
 
 on:
-  workflow_dispatch:  # Manual trigger
+  workflow_dispatch:  # Manual trigger only
 
 jobs:
-  deploy-to-iis:
+  build-deploy-run:
     runs-on: self-hosted
 
     steps:
-      - name: Build and Deploy Frontend to IIS
-        shell: powershell
-        env:
-          BUILD_PATH: C:\SSDLC\Nexus_Unzips\frontend
-          IIS_PATH: C:\inetpub\wwwroot\JuiceShop
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Build frontend
+        working-directory: ./frontend
         run: |
-          Write-Host "[INFO] Starting IIS Frontend Deployment..."
+          npm install
+          npm run build
 
-          if (-Not (Test-Path $env:BUILD_PATH)) {
-              Write-Error "Frontend folder not found at $env:BUILD_PATH"
-              exit 1
-          }
-
-          Write-Host "[INFO] Installing dependencies..."
-          cd $env:BUILD_PATH
-          npm install --legacy-peer-deps --no-audit
-
-          Write-Host "[INFO] Building Angular frontend..."
-          $env:NODE_OPTIONS="--max_old_space_size=4096"
-          npx ng build --configuration production --verbose
-
-          $distPath = Join-Path $env:BUILD_PATH "dist"
-          if (-Not (Test-Path $distPath)) {
-              Write-Error "Frontend build failed: dist folder not found."
-              exit 1
-          }
-
+      - name: Deploy frontend to IIS
+        run: |
           Write-Host "[INFO] Preparing IIS deployment folder..."
-          Import-Module WebAdministration -ErrorAction Stop
-          if (-Not (Test-Path $env:IIS_PATH)) {
-              New-Item -ItemType Directory -Path $env:IIS_PATH -Force | Out-Null
-          } else {
-              Remove-Item -Path "$env:IIS_PATH\*" -Recurse -Force
-          }
+          $iisPath = "C:\inetpub\wwwroot\JuiceShop"
+          if (!(Test-Path $iisPath)) { New-Item -ItemType Directory -Path $iisPath | Out-Null }
 
           Write-Host "[INFO] Copying frontend build to IIS path..."
-          Copy-Item -Path (Join-Path $distPath '*') -Destination $env:IIS_PATH -Recurse -Force
+          Copy-Item -Path "C:\SSDLC\Nexus_Unzips\frontend\dist\*" -Destination $iisPath -Recurse -Force
 
-          if (-Not (Get-Website | Where-Object { $_.Name -eq "JuiceShopSite" })) {
-              Write-Host "[INFO] Creating IIS site JuiceShopSite on port 8080..."
-              New-Website -Name "JuiceShopSite" -Port 8080 -PhysicalPath $env:IIS_PATH -Force | Out-Null
+          Write-Host "[INFO] Restarting IIS site JuiceShopSite if exists..."
+          Import-Module WebAdministration
+          if (Test-Path "IIS:\Sites\JuiceShopSite") {
+              Restart-WebAppPool -Name "DefaultAppPool"
+              Restart-WebItem "IIS:\Sites\JuiceShopSite"
           } else {
-              Write-Host "[INFO] Restarting existing IIS site JuiceShopSite..."
-              Restart-WebAppPool -Name "JuiceShopSite"
+              Write-Host "JuiceShopSite not found — skipping restart."
           }
 
-          Write-Host "✅ IIS Frontend deployment completed successfully."
-
-      - name: (Optional) Run Node.js Server as a Windows Service
-        shell: powershell
-        env:
-          SERVER_PATH: C:\SSDLC\Nexus_Unzips
+      - name: Run Node.js server as Windows Service
+        shell: pwsh
         run: |
-          Write-Host "[INFO] Starting Node.js server as a background service..."
-          cd $env:SERVER_PATH
-          if (Test-Path "server.js") {
-              Write-Host "[INFO] Launching Node server..."
-              Start-Process "node" "server.js" -WindowStyle Hidden
-              Write-Host "✅ Node.js server started successfully."
-          } else {
-              Write-Host "[WARN] server.js not found — skipping Node service start."
+          Write-Host "[INFO] Setting up Windows Service for Node.js..."
+          $serviceName = "JuiceShopNodeService"
+          $nssmPath = "C:\Tools\nssm.exe"  # Ensure nssm.exe exists here
+          $nodeExe = "C:\Program Files\nodejs\node.exe"
+          $appDir = "C:\SSDLC\Nexus_Unzips"
+          $serverFile = "server.js"
+
+          if (!(Test-Path $nssmPath)) {
+            Write-Host "[ERROR] NSSM not found at $nssmPath. Please install NSSM and re-run."
+            exit 1
           }
+
+          if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {
+            Write-Host "[INFO] Service already exists — restarting..."
+            & $nssmPath stop $serviceName
+            Start-Sleep -Seconds 3
+            & $nssmPath start $serviceName
+          } else {
+            Write-Host "[INFO] Creating new service..."
+            & $nssmPath install $serviceName $nodeExe "$appDir\$serverFile"
+            & $nssmPath set $serviceName AppDirectory $appDir
+            & $nssmPath set $serviceName Start SERVICE_AUTO_START
+            & $nssmPath start $serviceName
+          }
+
+          Write-Host "[INFO] Node.js service status:"
+          Get-Service -Name $serviceName
