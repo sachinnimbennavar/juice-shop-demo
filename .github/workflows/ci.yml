@@ -1,96 +1,58 @@
-name: Juice Shop IIS Deployment
+name: Juice Shop IIS Full Deployment
 
+# Make the workflow manually triggerable
 on:
-  workflow_dispatch:  # manual trigger
+  workflow_dispatch:
 
 jobs:
-  deploy-iis:
-    runs-on: self-hosted  # ensure your self-hosted runner is idle
+  deploy:
+    runs-on: self-hosted  # Windows machine with IIS + ARR + iisnode
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-        with:
-          fetch-depth: 1
+      # 1️⃣ Initial step to ensure workflow dispatch works
+      - name: Print test message
+        run: echo "✅ Workflow dispatch triggered successfully on $(hostname)"
 
-      - name: Deploy Frontend to IIS
+      # 2️⃣ IIS Deployment
+      - name: IIS Deployment
         shell: powershell
         env:
-          FRONTEND_SOURCE: C:\SSDLC\Nexus_Unzips\frontend\dist\frontend
-          FRONTEND_IIS_PATH: C:\inetpub\wwwroot\JuiceShopFrontend
-          BACKEND_URL: http://localhost/JuiceShopBackend
+          SITE_NAME: JuiceShopDemo
+          DEPLOY_PATH: C:\SSDLC\Nexus_Unzips
+          IIS_PATH: C:\inetpub\wwwroot\JuiceShopDemo
         run: |
+          Write-Host "=== Juice Shop IIS Deployment Started ==="
           Import-Module WebAdministration
-          Write-Host "=== Deploying Frontend ==="
-          if (-Not (Test-Path $env:FRONTEND_IIS_PATH)) { New-Item -ItemType Directory -Path $env:FRONTEND_IIS_PATH | Out-Null }
-          Remove-Item -Path "$env:FRONTEND_IIS_PATH\*" -Recurse -Force -ErrorAction SilentlyContinue
-          Copy-Item -Path "$env:FRONTEND_SOURCE\*" -Destination $env:FRONTEND_IIS_PATH -Recurse
 
-          # Update Angular environment.prod.js API URL
-          $envFile = Join-Path $env:FRONTEND_IIS_PATH "assets\environment.prod.js"
-          if (Test-Path $envFile) {
-              (Get-Content $envFile) -replace 'apiUrl\s*:\s*["\'].*["\']', "apiUrl: '$env:BACKEND_URL'" | Set-Content $envFile
-              Write-Host "[INFO] Frontend API URL updated to $env:BACKEND_URL"
+          # Stop and remove existing site if exists
+          $site = Get-Website -Name $env:SITE_NAME -ErrorAction SilentlyContinue
+          if ($null -ne $site) {
+              Write-Host "[INFO] Stopping existing IIS site $($env:SITE_NAME)..."
+              Stop-Website -Name $env:SITE_NAME
           }
 
-          # Create Angular web.config
-          $webConfigPath = Join-Path $env:FRONTEND_IIS_PATH "web.config"
-          @"
-<configuration>
-  <system.webServer>
-    <rewrite>
-      <rules>
-        <rule name='Angular Routes' stopProcessing='true'>
-          <match url='.*' />
-          <conditions logicalGrouping='MatchAll'>
-            <add input='{REQUEST_FILENAME}' matchType='IsFile' negate='true' />
-            <add input='{REQUEST_FILENAME}' matchType='IsDirectory' negate='true' />
-          </conditions>
-          <action type='Rewrite' url='/index.html' />
-        </rule>
-      </rules>
-    </rewrite>
-  </system.webServer>
-</configuration>
-"@ | Out-File -FilePath $webConfigPath -Encoding UTF8
-          Write-Host "✅ Frontend deployed."
+          # Clear IIS folder or create if missing
+          if (Test-Path $env:IIS_PATH) {
+              Write-Host "[INFO] Clearing existing files from $($env:IIS_PATH)..."
+              Get-ChildItem $env:IIS_PATH -Recurse -Force | Remove-Item -Force -Recurse
+          } else {
+              Write-Host "[INFO] Creating IIS directory $($env:IIS_PATH)..."
+              New-Item -ItemType Directory -Path $env:IIS_PATH -Force | Out-Null
+          }
 
-      - name: Deploy Backend to IIS
-        shell: powershell
-        env:
-          BACKEND_SOURCE: C:\SSDLC\Nexus_Unzips\server
-          BACKEND_IIS_PATH: C:\inetpub\wwwroot\JuiceShopBackend
-        run: |
-          Write-Host "=== Deploying Backend ==="
-          if (-Not (Test-Path $env:BACKEND_IIS_PATH)) { New-Item -ItemType Directory -Path $env:BACKEND_IIS_PATH | Out-Null }
-          Remove-Item -Path "$env:BACKEND_IIS_PATH\*" -Recurse -Force -ErrorAction SilentlyContinue
-          Copy-Item -Path "$env:BACKEND_SOURCE\*" -Destination $env:BACKEND_IIS_PATH -Recurse
+          # Copy files from unzipped deployment folder
+          Write-Host "[INFO] Copying files from $($env:DEPLOY_PATH) to $($env:IIS_PATH)..."
+          Copy-Item -Path (Join-Path $env:DEPLOY_PATH '*') -Destination $env:IIS_PATH -Recurse -Force
+          Write-Host "✅ Files copied successfully."
 
-          # Create iisnode web.config
-          $backendWebConfig = Join-Path $env:BACKEND_IIS_PATH "web.config"
-          @"
-<configuration>
-  <system.webServer>
-    <handlers>
-      <add name='iisnode' path='server.js' verb='*' modules='iisnode'/>
-    </handlers>
-    <rewrite>
-      <rules>
-        <rule name='Nodejs' stopProcessing='true'>
-          <match url='.*' />
-          <action type='Rewrite' url='server.js'/>
-        </rule>
-      </rules>
-    </rewrite>
-    <iisnode nodeProcessCommandLine='C:\Program Files\nodejs\node.exe' />
-  </system.webServer>
-</configuration>
-"@ | Out-File -FilePath $backendWebConfig -Encoding UTF8
-          Write-Host "✅ Backend deployed."
+          # Create or start IIS site
+          $site = Get-Website -Name $env:SITE_NAME -ErrorAction SilentlyContinue
+          if ($null -ne $site) {
+              Write-Host "[INFO] Starting IIS site $($env:SITE_NAME)..."
+              Start-Website -Name $env:SITE_NAME
+          } else {
+              Write-Host "[INFO] Creating new IIS site $($env:SITE_NAME) on port 8080..."
+              New-Website -Name $env:SITE_NAME -Port 8080 -PhysicalPath $env:IIS_PATH -Force | Out-Null
+          }
 
-      - name: Restart IIS
-        shell: powershell
-        run: |
-          Write-Host "=== Restarting IIS ==="
-          iisreset
-          Write-Host "✅ IIS restarted. Frontend and backend are live!"
+          Write-Host "=== Deployment Completed Successfully ==="
