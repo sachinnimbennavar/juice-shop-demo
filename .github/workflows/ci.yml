@@ -1,135 +1,47 @@
-name: Juice Shop IIS Full Deployment
+name: Juice Shop IIS Deployment
 
 on:
   workflow_dispatch:  # Manual trigger
 
 jobs:
-  deploy-iis:
+  deploy:
     runs-on: self-hosted
 
     steps:
-      # 1️⃣ Test runner and workflow dispatch
-      - name: Test Runner
+      # 1️⃣ Test workflow dispatch
+      - name: Print test message
         run: echo "✅ Workflow triggered successfully on $(hostname)"
 
-      # 2️⃣ Set environment variables
-      - name: Set Paths and URLs
-        shell: powershell
-        run: |
-          $env:FRONTEND_SOURCE = "C:\SSDLC\Nexus_Unzips\frontend\dist\frontend"
-          $env:FRONTEND_IIS_PATH = "C:\inetpub\wwwroot\JuiceShopFrontend"
-          $env:BACKEND_SOURCE = "C:\SSDLC\Nexus_Unzips\server"
-          $env:BACKEND_IIS_PATH = "C:\inetpub\wwwroot\JuiceShopBackend"
-          $env:BACKEND_URL = "http://localhost/JuiceShopBackend"
-          $env:SITE_NAME_FRONTEND = "JuiceShopFrontend"
-          $env:SITE_NAME_BACKEND = "JuiceShopBackend"
-
-      # 3️⃣ Deploy Frontend
-      - name: Deploy Frontend to IIS
+      # 2️⃣ IIS Deployment (frontend & backend) from existing unzipped folder
+      - name: Deploy Frontend & Backend to IIS
         shell: powershell
         run: |
           Import-Module WebAdministration
-          Write-Host "=== Deploying Frontend ==="
-          
-          if (-Not (Test-Path $env:FRONTEND_SOURCE)) {
-              Write-Error "Frontend source folder not found: $env:FRONTEND_SOURCE"
-              exit 1
+
+          # Frontend
+          $FE_SRC = "C:\SSDLC\Nexus_Unzips\frontend\dist\frontend"
+          $FE_DEST = "C:\inetpub\wwwroot\JuiceShopFrontend"
+          if (-Not (Test-Path $FE_SRC)) { 
+              Write-Error "Frontend source path not found: $FE_SRC"; exit 1 
           }
+          if (-Not (Test-Path $FE_DEST)) { New-Item -ItemType Directory -Path $FE_DEST | Out-Null }
+          Remove-Item "$FE_DEST\*" -Recurse -Force -ErrorAction SilentlyContinue
+          Copy-Item "$FE_SRC\*" $FE_DEST -Recurse
+          $siteFE = Get-Website -Name "JuiceShopFrontend" -ErrorAction SilentlyContinue
+          if ($null -ne $siteFE) { Stop-Website -Name "JuiceShopFrontend"; Start-Website -Name "JuiceShopFrontend" }
+          else { New-Website -Name "JuiceShopFrontend" -Port 8081 -PhysicalPath $FE_DEST | Out-Null }
 
-          if (-Not (Test-Path $env:FRONTEND_IIS_PATH)) { New-Item -ItemType Directory -Path $env:FRONTEND_IIS_PATH | Out-Null }
-
-          Remove-Item -Path "$env:FRONTEND_IIS_PATH\*" -Recurse -Force -ErrorAction SilentlyContinue
-          Copy-Item -Path "$env:FRONTEND_SOURCE\*" -Destination $env:FRONTEND_IIS_PATH -Recurse
-
-          # Update Angular environment API URL
-          $envFile = Join-Path $env:FRONTEND_IIS_PATH "assets\environment.prod.js"
-          if (Test-Path $envFile) {
-              (Get-Content $envFile) -replace 'apiUrl\s*:\s*["\'].*["\']', "apiUrl: '$env:BACKEND_URL'" | Set-Content $envFile
+          # Backend
+          $BE_SRC = "C:\SSDLC\Nexus_Unzips\server"
+          $BE_DEST = "C:\inetpub\wwwroot\JuiceShopBackend"
+          if (-Not (Test-Path $BE_SRC)) { 
+              Write-Error "Backend source path not found: $BE_SRC"; exit 1 
           }
+          if (-Not (Test-Path $BE_DEST)) { New-Item -ItemType Directory -Path $BE_DEST | Out-Null }
+          Remove-Item "$BE_DEST\*" -Recurse -Force -ErrorAction SilentlyContinue
+          Copy-Item "$BE_SRC\*" $BE_DEST -Recurse
+          $siteBE = Get-Website -Name "JuiceShopBackend" -ErrorAction SilentlyContinue
+          if ($null -ne $siteBE) { Stop-Website -Name "JuiceShopBackend"; Start-Website -Name "JuiceShopBackend" }
+          else { New-Website -Name "JuiceShopBackend" -Port 8080 -PhysicalPath $BE_DEST | Out-Null }
 
-          # Create Angular web.config
-          $webConfigPath = Join-Path $env:FRONTEND_IIS_PATH "web.config"
-          @"
-<configuration>
-  <system.webServer>
-    <rewrite>
-      <rules>
-        <rule name='Angular Routes' stopProcessing='true'>
-          <match url='.*' />
-          <conditions logicalGrouping='MatchAll'>
-            <add input='{REQUEST_FILENAME}' matchType='IsFile' negate='true' />
-            <add input='{REQUEST_FILENAME}' matchType='IsDirectory' negate='true' />
-          </conditions>
-          <action type='Rewrite' url='/index.html' />
-        </rule>
-      </rules>
-    </rewrite>
-  </system.webServer>
-</configuration>
-"@ | Out-File -FilePath $webConfigPath -Encoding UTF8
-
-          # Start IIS site
-          $site = Get-Website -Name $env:SITE_NAME_FRONTEND -ErrorAction SilentlyContinue
-          if ($null -ne $site) {
-              Stop-Website -Name $env:SITE_NAME_FRONTEND
-              Start-Website -Name $env:SITE_NAME_FRONTEND
-          } else {
-              New-Website -Name $env:SITE_NAME_FRONTEND -Port 8081 -PhysicalPath $env:FRONTEND_IIS_PATH | Out-Null
-          }
-          Write-Host "✅ Frontend deployed."
-
-      # 4️⃣ Deploy Backend
-      - name: Deploy Backend to IIS
-        shell: powershell
-        run: |
-          Import-Module WebAdministration
-          Write-Host "=== Deploying Backend ==="
-          
-          if (-Not (Test-Path $env:BACKEND_SOURCE)) {
-              Write-Error "Backend source folder not found: $env:BACKEND_SOURCE"
-              exit 1
-          }
-
-          if (-Not (Test-Path $env:BACKEND_IIS_PATH)) { New-Item -ItemType Directory -Path $env:BACKEND_IIS_PATH | Out-Null }
-
-          Remove-Item -Path "$env:BACKEND_IIS_PATH\*" -Recurse -Force -ErrorAction SilentlyContinue
-          Copy-Item -Path "$env:BACKEND_SOURCE\*" -Destination $env:BACKEND_IIS_PATH -Recurse
-
-          # Create iisnode web.config
-          $backendWebConfig = Join-Path $env:BACKEND_IIS_PATH "web.config"
-          @"
-<configuration>
-  <system.webServer>
-    <handlers>
-      <add name='iisnode' path='server.js' verb='*' modules='iisnode'/>
-    </handlers>
-    <rewrite>
-      <rules>
-        <rule name='Nodejs' stopProcessing='true'>
-          <match url='.*' />
-          <action type='Rewrite' url='server.js'/>
-        </rule>
-      </rules>
-    </rewrite>
-    <iisnode nodeProcessCommandLine='C:\Program Files\nodejs\node.exe' />
-  </system.webServer>
-</configuration>
-"@ | Out-File -FilePath $backendWebConfig -Encoding UTF8
-
-          # Start IIS site
-          $site = Get-Website -Name $env:SITE_NAME_BACKEND -ErrorAction SilentlyContinue
-          if ($null -ne $site) {
-              Stop-Website -Name $env:SITE_NAME_BACKEND
-              Start-Website -Name $env:SITE_NAME_BACKEND
-          } else {
-              New-Website -Name $env:SITE_NAME_BACKEND -Port 8080 -PhysicalPath $env:BACKEND_IIS_PATH | Out-Null
-          }
-          Write-Host "✅ Backend deployed."
-
-      # 5️⃣ Restart IIS
-      - name: Restart IIS
-        shell: powershell
-        run: |
-          Write-Host "[INFO] Restarting IIS..."
-          iisreset
-          Write-Host "✅ Juice Shop frontend and backend are live!"
+          Write-Host "✅ Frontend and Backend deployed to IIS successfully!"
