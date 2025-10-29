@@ -53,11 +53,11 @@ jobs:
       - name: Juice Shop IIS Deployment
         shell: powershell
         env:
-          DEPLOY_PATH: C:\SSDLC\Nexus_Unzips
+          DEPLOY_PATH: C:\DeleteafterTest\veryLatest
           IIS_SITE_NAME: JuiceShopDemo
           IIS_ROOT: C:\inetpub\wwwroot
-          FRONTEND_SOURCE: C:\SSDLC\Nexus_Unzips\frontend\dist\frontend
-          SERVER_SOURCE: C:\SSDLC\Nexus_Unzips\server
+          FRONTEND_SOURCE: C:\DeleteafterTest\veryLatest\frontend\dist\frontend
+          SERVER_SOURCE: C:\DeleteafterTest\veryLatest\server
         run: |
           Write-Host "=== Juice Shop IIS Deployment Started ==="
 
