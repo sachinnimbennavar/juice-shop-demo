@@ -1,14 +1,14 @@
 name: Juice Shop IIS Full Deployment
 
+# This makes the workflow manually triggerable
 on:
-  workflow_dispatch:  # Manual trigger
+  workflow_dispatch:
 
 jobs:
   deploy-iis:
-    runs-on: self-hosted  # Your Windows machine with IIS + ARR + iisnode
+    runs-on: self-hosted  # Windows machine with IIS + ARR + iisnode
 
     steps:
-      # 1️⃣ Set environment paths
       - name: Set Paths and URLs
         shell: powershell
         run: |
@@ -18,23 +18,18 @@ jobs:
           $env:BACKEND_IIS_PATH = "C:\inetpub\wwwroot\JuiceShopBackend"
           $env:BACKEND_URL = "http://localhost/JuiceShopBackend"
 
-      # 2️⃣ Deploy frontend
-      - name: Deploy Frontend to IIS
+      - name: Deploy Frontend
         shell: powershell
         run: |
-          Write-Host "[INFO] Deploying frontend..."
           if (-Not (Test-Path $env:FRONTEND_IIS_PATH)) { New-Item -ItemType Directory -Path $env:FRONTEND_IIS_PATH | Out-Null }
           Remove-Item -Path "$env:FRONTEND_IIS_PATH\*" -Recurse -Force -ErrorAction SilentlyContinue
           Copy-Item -Path "$env:FRONTEND_SOURCE\*" -Destination $env:FRONTEND_IIS_PATH -Recurse
-          
-          # Update frontend API URL
+
           $envFile = Join-Path $env:FRONTEND_IIS_PATH "assets\environment.prod.js"
           if (Test-Path $envFile) {
               (Get-Content $envFile) -replace 'apiUrl\s*:\s*["\'].*["\']', "apiUrl: '$env:BACKEND_URL'" | Set-Content $envFile
-              Write-Host "[INFO] Frontend API URL updated to $env:BACKEND_URL"
           }
 
-          # Create Angular web.config for routing
           $webConfigPath = Join-Path $env:FRONTEND_IIS_PATH "web.config"
           @"
 <configuration>
@@ -54,18 +49,14 @@ jobs:
   </system.webServer>
 </configuration>
 "@ | Out-File -FilePath $webConfigPath -Encoding UTF8
-          Write-Host "[INFO] Frontend deployed."
 
-      # 3️⃣ Deploy backend
-      - name: Deploy Backend to IIS
+      - name: Deploy Backend
         shell: powershell
         run: |
-          Write-Host "[INFO] Deploying backend..."
           if (-Not (Test-Path $env:BACKEND_IIS_PATH)) { New-Item -ItemType Directory -Path $env:BACKEND_IIS_PATH | Out-Null }
           Remove-Item -Path "$env:BACKEND_IIS_PATH\*" -Recurse -Force -ErrorAction SilentlyContinue
           Copy-Item -Path "$env:BACKEND_SOURCE\*" -Destination $env:BACKEND_IIS_PATH -Recurse
 
-          # Create iisnode web.config for backend
           $backendWebConfig = Join-Path $env:BACKEND_IIS_PATH "web.config"
           @"
 <configuration>
@@ -85,12 +76,8 @@ jobs:
   </system.webServer>
 </configuration>
 "@ | Out-File -FilePath $backendWebConfig -Encoding UTF8
-          Write-Host "[INFO] Backend deployed."
 
-      # 4️⃣ Restart IIS
       - name: Restart IIS
         shell: powershell
         run: |
-          Write-Host "[INFO] Restarting IIS..."
           iisreset
-          Write-Host "[INFO] IIS restarted. Juice Shop frontend and backend are live!"
