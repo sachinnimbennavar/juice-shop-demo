@@ -1,61 +1,120 @@
-name: Juice Shop IIS Deployment Only
+name: Juice Shop IIS Full Deployment
 
 on:
-  workflow_dispatch:  # Manual trigger from GitHub Actions
+  workflow_dispatch:
 
 jobs:
-  deploy:
-    name: Deploy to IIS from local unzipped folder
-    runs-on: self-hosted
+  deploy-iis:
+    runs-on: self-hosted  # Windows machine with IIS + ARR + iisnode
 
     steps:
-      - name: Deploy to IIS
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 1
+
+      - name: Deploy Frontend and Backend to IIS
         shell: powershell
         run: |
-          Import-Module WebAdministration
-
-          $siteName = "JuiceShopDemo"
-          $source = "C:\SSDLC\Nexus_Unzips"
-          $destination = "C:\inetpub\wwwroot\JuiceShopDemo"
-
           Write-Host "=== Juice Shop IIS Deployment Started ==="
 
-          if (-not (Test-Path $source)) {
-              Write-Error "Source path $source not found! Make sure CI/CD pipeline completed unzip phase."
-              exit 1
+          # Paths
+          $frontendSource = "C:\SSDLC\Nexus_Unzips\frontend\dist\frontend"
+          $frontendIIS = "C:\inetpub\wwwroot\JuiceShopFrontend"
+          $frontendSite = "JuiceShopFrontend"
+          $frontendPort = 8081
+
+          $backendSource = "C:\SSDLC\Nexus_Unzips\server"
+          $backendIIS = "C:\inetpub\wwwroot\JuiceShopBackend"
+          $backendSite = "JuiceShopBackend"
+          $backendPort = 8080
+          $backendUrl = "http://localhost/$backendSite"
+
+          Import-Module WebAdministration -ErrorAction Stop
+
+          ###### Frontend Deployment ######
+          Write-Host "Deploying frontend..."
+          if (-Not (Test-Path $frontendIIS)) { New-Item -ItemType Directory -Path $frontendIIS | Out-Null }
+          Remove-Item -Path "$frontendIIS\*" -Recurse -Force -ErrorAction SilentlyContinue
+          Copy-Item -Path "$frontendSource\*" -Destination $frontendIIS -Recurse -Force
+
+          # Update API URL
+          $envFile = Join-Path $frontendIIS "assets\environment.prod.js"
+          if (Test-Path $envFile) {
+              (Get-Content $envFile) -replace 'apiUrl\s*:\s*["\'].*["\']', "apiUrl: '$backendUrl'" | Set-Content $envFile
           }
 
-          # Stop existing IIS site if it exists
-          if (Test-Path "IIS:\Sites\$siteName") {
-              Write-Host "Stopping existing IIS site $siteName..."
-              Stop-Website -Name $siteName
+          # Angular routing web.config
+          $webConfigPath = Join-Path $frontendIIS "web.config"
+          @"
+<configuration>
+  <system.webServer>
+    <rewrite>
+      <rules>
+        <rule name='Angular Routes' stopProcessing='true'>
+          <match url='.*' />
+          <conditions logicalGrouping='MatchAll'>
+            <add input='{REQUEST_FILENAME}' matchType='IsFile' negate='true' />
+            <add input='{REQUEST_FILENAME}' matchType='IsDirectory' negate='true' />
+          </conditions>
+          <action type='Rewrite' url='/index.html' />
+        </rule>
+      </rules>
+    </rewrite>
+  </system.webServer>
+</configuration>
+"@ | Out-File -FilePath $webConfigPath -Encoding UTF8
+
+          # Create or update frontend site
+          $site = Get-Website -Name $frontendSite -ErrorAction SilentlyContinue
+          if ($null -eq $site) {
+              Write-Host "Creating new IIS site for frontend on port $frontendPort..."
+              New-Website -Name $frontendSite -Port $frontendPort -PhysicalPath $frontendIIS -Force | Out-Null
           } else {
-              Write-Host "No existing site found. It will be created."
+              Write-Host "Updating existing frontend IIS site..."
+              Set-ItemProperty "IIS:\Sites\$frontendSite" -Name physicalPath -Value $frontendIIS
           }
+          Write-Host "✅ Frontend deployed successfully."
 
-          # Clear target folder
-          if (Test-Path $destination) {
-              Write-Host "Clearing old files from $destination..."
-              Remove-Item -Path "$destination\*" -Recurse -Force
+          ###### Backend Deployment ######
+          Write-Host "Deploying backend..."
+          if (-Not (Test-Path $backendIIS)) { New-Item -ItemType Directory -Path $backendIIS | Out-Null }
+          Remove-Item -Path "$backendIIS\*" -Recurse -Force -ErrorAction SilentlyContinue
+          Copy-Item -Path "$backendSource\*" -Destination $backendIIS -Recurse -Force
+
+          # iisnode web.config
+          $backendWebConfig = Join-Path $backendIIS "web.config"
+          @"
+<configuration>
+  <system.webServer>
+    <handlers>
+      <add name='iisnode' path='server.js' verb='*' modules='iisnode'/>
+    </handlers>
+    <rewrite>
+      <rules>
+        <rule name='Nodejs' stopProcessing='true'>
+          <match url='.*' />
+          <action type='Rewrite' url='server.js'/>
+        </rule>
+      </rules>
+    </rewrite>
+    <iisnode nodeProcessCommandLine='C:\Program Files\nodejs\node.exe' />
+  </system.webServer>
+</configuration>
+"@ | Out-File -FilePath $backendWebConfig -Encoding UTF8
+
+          # Create or update backend site
+          $site = Get-Website -Name $backendSite -ErrorAction SilentlyContinue
+          if ($null -eq $site) {
+              Write-Host "Creating new IIS site for backend on port $backendPort..."
+              New-Website -Name $backendSite -Port $backendPort -PhysicalPath $backendIIS -Force | Out-Null
           } else {
-              Write-Host "Creating directory $destination..."
-              New-Item -ItemType Directory -Path $destination -Force | Out-Null
+              Write-Host "Updating existing backend IIS site..."
+              Set-ItemProperty "IIS:\Sites\$backendSite" -Name physicalPath -Value $backendIIS
           }
+          Write-Host "✅ Backend deployed successfully."
 
-          # Copy new build files
-          Write-Host "Copying files from $source to $destination..."
-          Copy-Item -Path "$source\*" -Destination $destination -Recurse -Force
-          Write-Host "✅ Files copied successfully."
-
-          # Start or create IIS site
-          if (Test-Path "IIS:\Sites\$siteName") {
-              Write-Host "Starting existing IIS site..."
-              Start-Website -Name $siteName
-              Write-Host "✅ IIS site restarted successfully."
-          } else {
-              Write-Host "Creating new IIS site on port 8080..."
-              New-Website -Name $siteName -Port 8080 -PhysicalPath $destination -Force | Out-Null
-              Write-Host "✅ New IIS site created and running on port 8080."
-          }
-
+          ###### Restart IIS ######
+          Write-Host "Restarting IIS..."
+          iisreset
           Write-Host "=== Deployment Completed Successfully ==="
