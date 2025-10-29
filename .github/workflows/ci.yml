@@ -5,7 +5,7 @@ on:
 
 jobs:
   iis-deploy:
-    runs-on: self-hosted   # Your Windows IIS/ARR/iisnode runner
+    runs-on: self-hosted # Your Windows IIS server with ARR and iisnode
 
     env:
       FRONTEND_DEPLOY: C:\SSDLC\Nexus_Unzips\frontend\dist\frontend
@@ -17,8 +17,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
-        with:
-          fetch-depth: 1
 
       - name: Deploy Frontend
         shell: powershell
@@ -26,19 +24,16 @@ jobs:
           Write-Host "[INFO] Deploying frontend..."
           Import-Module WebAdministration -ErrorAction Stop
           if (Test-Path $env:FRONTEND_IIS) {
-            Write-Host "[INFO] Clearing existing frontend files..."
             Get-ChildItem $env:FRONTEND_IIS -Recurse -Force | Remove-Item -Force -Recurse
           } else {
-            Write-Host "[INFO] Creating frontend IIS directory..."
             New-Item -ItemType Directory -Path $env:FRONTEND_IIS -Force | Out-Null
           }
           Copy-Item -Path (Join-Path $env:FRONTEND_DEPLOY '*') -Destination $env:FRONTEND_IIS -Recurse -Force
 
-          # Optionally update API URL in Angular build asset if present
+          # Optional: Update API URL in Angular build asset
           $envFile = Join-Path $env:FRONTEND_IIS "assets\environment.prod.js"
           if (Test-Path $envFile) {
             (Get-Content $envFile) -replace 'apiUrl\s*:\s*["''][^"''"]*["'']', "apiUrl: '$env:BACKEND_URL'" | Set-Content $envFile
-            Write-Host "[INFO] Frontend API URL updated."
           }
 
           # Write Angular routing web.config
@@ -68,10 +63,8 @@ jobs:
           Write-Host "[INFO] Deploying backend..."
           Import-Module WebAdministration -ErrorAction Stop
           if (Test-Path $env:BACKEND_IIS) {
-            Write-Host "[INFO] Clearing existing backend files..."
             Get-ChildItem $env:BACKEND_IIS -Recurse -Force | Remove-Item -Force -Recurse
           } else {
-            Write-Host "[INFO] Creating backend IIS directory..."
             New-Item -ItemType Directory -Path $env:BACKEND_IIS -Force | Out-Null
           }
           Copy-Item -Path (Join-Path $env:BACKEND_DEPLOY '*') -Destination $env:BACKEND_IIS -Recurse -Force
@@ -105,26 +98,20 @@ jobs:
           # Frontend IIS site
           $frontendSite = Get-Website -Name "JuiceShopFrontend" -ErrorAction SilentlyContinue
           if ($null -ne $frontendSite) {
-            Write-Host "[INFO] Starting frontend site..."
             Start-Website -Name "JuiceShopFrontend"
           } else {
-            Write-Host "[INFO] Creating frontend site on port 8080..."
             New-Website -Name "JuiceShopFrontend" -Port 8080 -PhysicalPath $env:FRONTEND_IIS -Force | Out-Null
           }
-
           # Backend IIS site
           $backendSite = Get-Website -Name "JuiceShopBackend" -ErrorAction SilentlyContinue
           if ($null -ne $backendSite) {
-            Write-Host "[INFO] Starting backend site..."
             Start-Website -Name "JuiceShopBackend"
           } else {
-            Write-Host "[INFO] Creating backend site on port 8081..."
             New-Website -Name "JuiceShopBackend" -Port 8081 -PhysicalPath $env:BACKEND_IIS -Force | Out-Null
           }
 
       - name: Restart IIS
         shell: powershell
         run: |
-          Write-Host "[INFO] Restarting IIS..."
           iisreset
           Write-Host "[INFO] IIS restarted. Juice Shop frontend and backend are live!"
