@@ -1,20 +1,18 @@
-name: Juice Shop IIS Full Deployment
+name: Juice Shop IIS Deployment Without Build
 
 on:
   workflow_dispatch:
 
 jobs:
-  build-and-deploy:
+  deploy:
     runs-on: self-hosted
 
     steps:
-      # 1️⃣ Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v3
         with:
           fetch-depth: 1
 
-      # 2️⃣ Fix missing provider-metadata.json file error
       - name: Create missing provider-metadata.json to avoid ENOENT error
         shell: powershell
         run: |
@@ -27,29 +25,24 @@ jobs:
             '{}' | Out-File -Encoding utf8 $file
           }
 
-      # 3️⃣ Install frontend dependencies
-      - name: Install frontend dependencies
+      - name: Verify frontend build exists
+        shell: powershell
         run: |
-          cd frontend
-          npm install --legacy-peer-deps
-          cd ..
+          $frontendBuildPath = "frontend\dist\frontend"
+          if (-not (Test-Path $frontendBuildPath)) {
+            Write-Error "Frontend build folder not found: $frontendBuildPath"
+            exit 1
+          }
 
-      # 4️⃣ Build frontend
-      - name: Build frontend
+      - name: Verify server build exists
+        shell: powershell
         run: |
-          cd frontend
-          npm run build -- --configuration production
-          cd ..
+          $serverBuildPath = "server"
+          if (-not (Test-Path $serverBuildPath)) {
+            Write-Error "Server build folder not found: $serverBuildPath"
+            exit 1
+          }
 
-      # 5️⃣ Install server dependencies
-      - name: Install server dependencies
-        run: npm install --prefer-offline --no-audit
-
-      # 6️⃣ Build server
-      - name: Build server
-        run: npm run build:server
-
-      # 7️⃣ IIS Deployment
       - name: Juice Shop IIS Deployment
         shell: powershell
         env:
@@ -63,7 +56,7 @@ jobs:
 
           Import-Module WebAdministration
 
-          # Stop existing IIS site if it exists
+          # Stop existing IIS site if exists
           $site = Get-Website -Name $env:IIS_SITE_NAME -ErrorAction SilentlyContinue
           if ($null -ne $site) {
               Write-Host "[INFO] Stopping existing IIS site $($env:IIS_SITE_NAME)..."
@@ -86,7 +79,8 @@ jobs:
               Write-Host "[INFO] Copying frontend from $($env:FRONTEND_SOURCE) to $iisPath..."
               Copy-Item -Path (Join-Path $env:FRONTEND_SOURCE '*') -Destination $iisPath -Recurse -Force
           } else {
-              Write-Host "[WARNING] Frontend build folder not found: $($env:FRONTEND_SOURCE)"
+              Write-Error "Frontend build folder not found: $($env:FRONTEND_SOURCE)"
+              exit 1
           }
 
           # Copy server
@@ -94,14 +88,19 @@ jobs:
               Write-Host "[INFO] Copying server from $($env:SERVER_SOURCE) to $iisPath..."
               Copy-Item -Path (Join-Path $env:SERVER_SOURCE '*') -Destination $iisPath -Recurse -Force
           } else {
-              Write-Host "[WARNING] Server build folder not found: $($env:SERVER_SOURCE)"
+              Write-Error "Server build folder not found: $($env:SERVER_SOURCE)"
+              exit 1
           }
 
-          # Start IIS site or create if missing
+          # Start IIS site or create if missing, only start if stopped
           $site = Get-Website -Name $env:IIS_SITE_NAME -ErrorAction SilentlyContinue
           if ($null -ne $site) {
-              Write-Host "[INFO] Starting IIS site $($env:IIS_SITE_NAME)..."
-              Start-Website -Name $env:IIS_SITE_NAME
+              if ($site.State -ne 'Started') {
+                  Write-Host "[INFO] Starting IIS site $($env:IIS_SITE_NAME)..."
+                  Start-Website -Name $env:IIS_SITE_NAME
+              } else {
+                  Write-Host "[INFO] IIS site $($env:IIS_SITE_NAME) already started."
+              }
           } else {
               Write-Host "[INFO] Creating new IIS site $($env:IIS_SITE_NAME) on port 8080..."
               New-Website -Name $env:IIS_SITE_NAME -Port 8080 -PhysicalPath $iisPath -Force | Out-Null
