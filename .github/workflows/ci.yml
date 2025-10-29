@@ -1,44 +1,60 @@
-name: Juice Shop CI/CD IIS Deployment
+name: Juice Shop Deployment Manual
 
 on:
-  workflow_dispatch:  # Manual trigger only
+  workflow_dispatch:  # Only manual trigger
 
 jobs:
-  build-and-deploy:
-    runs-on: self-hosted
-
+  deploy-latest-zip:
+    runs-on: windows-latest  # Since you're using PowerShell and IIS paths
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Checkout Repo
+        uses: actions/checkout@v3
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Build frontend
-        working-directory: ./frontend
+      - name: Juice Shop Deployment
+        shell: powershell
+        env:
+          NEXUS_URL: http://127.0.0.1:8081
+          NEXUS_REPO: JuiceShopMavenDemo
+          DEPLOY_PATH: C:\SSDLC\Nexus_Unzips
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
-          npm install --legacy-peer-deps --no-audit
-          npm run build -- --configuration production --watch=false
-
-      - name: Deploy frontend to IIS
-        shell: pwsh
-        run: |
-          Write-Host "[INFO] Preparing IIS deployment folder..."
-          $iisPath = "C:\inetpub\wwwroot\JuiceShop"
-          if (!(Test-Path $iisPath)) { New-Item -ItemType Directory -Path $iisPath | Out-Null }
-
-          Write-Host "[INFO] Copying frontend build to IIS path..."
-          Copy-Item -Path "C:\SSDLC\Nexus_Unzips\frontend\dist\*" -Destination $iisPath -Recurse -Force
-
-          Write-Host "[INFO] Restarting IIS site JuiceShopSite if exists..."
-          Import-Module WebAdministration
-          if (Test-Path "IIS:\Sites\JuiceShopSite") {
-              Restart-WebAppPool -Name "DefaultAppPool"
-              Restart-WebItem "IIS:\Sites\JuiceShopSite"
+          Write-Host "[INFO] Starting deployment..."
+          # Clear deployment folder for fresh unzip
+          if (Test-Path $env:DEPLOY_PATH) {
+              Write-Host "[INFO] Clearing existing files from $env:DEPLOY_PATH ..."
+              Remove-Item -Path "$env:DEPLOY_PATH\*" -Recurse -Force
           } else {
-              Write-Host "JuiceShopSite not found — skipping restart."
+              New-Item -ItemType Directory -Path $env:DEPLOY_PATH -Force | Out-Null
           }
-
-          Write-Host "[INFO] IIS deployment completed successfully."
+          # Prepare Basic Auth
+          $base64Auth = [System.Convert]::ToBase64String(
+              [System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}")
+          )
+          $headers = @{ Authorization = "Basic $base64Auth" }
+          # Fetch all full-repo components from Nexus
+          $apiUrl = "${env:NEXUS_URL}/service/rest/v1/search?repository=${env:NEXUS_REPO}&group=com.example.juiceshop&name=full-repo"
+          Write-Host "[INFO] Fetching available versions from $apiUrl ..."
+          $response = Invoke-RestMethod -Uri $apiUrl -Headers $headers -Method Get
+          if ($null -eq $response.items -or $response.items.Count -eq 0) {
+              Write-Host "[ERROR] No full-repo versions found in Nexus!"
+              exit 1
+          }
+          # Find the latest version by timestamp
+          $latest = $response.items | Sort-Object { $_.version } -Descending | Select-Object -First 1
+          $latestVersion = $latest.version
+          $zipDownloadUrl = $latest.assets[0].downloadUrl
+          Write-Host "[INFO] Latest version: $latestVersion"
+          Write-Host "[INFO] Download URL: $zipDownloadUrl"
+          # Download ZIP
+          $zipFilePath = Join-Path $env:DEPLOY_PATH "full-repo-$latestVersion.zip"
+          Write-Host "[INFO] Downloading full repo ZIP to $zipFilePath ..."
+          Invoke-WebRequest -Uri $zipDownloadUrl -OutFile $zipFilePath -Headers $headers
+          if (-Not (Test-Path $zipFilePath)) {
+              Write-Host "[ERROR] Failed to download ZIP!"
+              exit 1
+          }
+          # Unzip
+          Write-Host "[INFO] Extracting ZIP to $env:DEPLOY_PATH ..."
+          Expand-Archive -Path $zipFilePath -DestinationPath $env:DEPLOY_PATH -Force
+          Write-Host "✅ Deployment completed successfully! Latest full-repo version: $latestVersion"
