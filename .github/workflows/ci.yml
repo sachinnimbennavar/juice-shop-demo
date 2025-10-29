@@ -1,94 +1,17 @@
-name: Juice Shop IIS Deployment
+name: Test Self-Hosted Runner
 
 on:
   workflow_dispatch:  # Manual trigger
 
 jobs:
-  deploy-iis:
-    runs-on: self-hosted  # Your Windows machine with IIS + ARR + iisnode
+  runner-check:
+    runs-on: self-hosted  # Your Windows self-hosted runner
 
     steps:
-      - name: Set Paths
+      - name: Print Runner Info
         shell: powershell
         run: |
-          $env:FRONTEND_PATH = "C:\SSDLC\Nexus_Unzips\frontend\dist\frontend"
-          $env:BACKEND_PATH = "C:\SSDLC\Nexus_Unzips\server"
-          $env:FRONTEND_IIS = "C:\inetpub\wwwroot\JuiceShopFrontend"
-          $env:BACKEND_IIS = "C:\inetpub\wwwroot\JuiceShopBackend"
-          $env:BACKEND_URL = "http://localhost/JuiceShopBackend"
-
-      - name: Deploy Frontend
-        shell: powershell
-        run: |
-          Import-Module WebAdministration
-          Write-Host "=== Deploying Frontend ==="
-          if (-Not (Test-Path $env:FRONTEND_IIS)) { New-Item -ItemType Directory -Path $env:FRONTEND_IIS | Out-Null }
-          Remove-Item -Path "$env:FRONTEND_IIS\*" -Recurse -Force -ErrorAction SilentlyContinue
-          Copy-Item -Path "$env:FRONTEND_PATH\*" -Destination $env:FRONTEND_IIS -Recurse -Force
-
-          # Update API URL in environment.prod.js
-          $envFile = Join-Path $env:FRONTEND_IIS "assets\environment.prod.js"
-          if (Test-Path $envFile) {
-              (Get-Content $envFile) -replace 'apiUrl\s*:\s*["\'].*["\']', "apiUrl: '$env:BACKEND_URL'" | Set-Content $envFile
-          }
-
-          # Angular routing web.config
-          $webConfigPath = Join-Path $env:FRONTEND_IIS "web.config"
-          @"
-<configuration>
-  <system.webServer>
-    <rewrite>
-      <rules>
-        <rule name='Angular Routes' stopProcessing='true'>
-          <match url='.*' />
-          <conditions logicalGrouping='MatchAll'>
-            <add input='{REQUEST_FILENAME}' matchType='IsFile' negate='true' />
-            <add input='{REQUEST_FILENAME}' matchType='IsDirectory' negate='true' />
-          </conditions>
-          <action type='Rewrite' url='/index.html' />
-        </rule>
-      </rules>
-    </rewrite>
-  </system.webServer>
-</configuration>
-"@ | Out-File -FilePath $webConfigPath -Encoding UTF8
-
-          Write-Host "✅ Frontend deployed."
-
-      - name: Deploy Backend
-        shell: powershell
-        run: |
-          Write-Host "=== Deploying Backend ==="
-          if (-Not (Test-Path $env:BACKEND_IIS)) { New-Item -ItemType Directory -Path $env:BACKEND_IIS | Out-Null }
-          Remove-Item -Path "$env:BACKEND_IIS\*" -Recurse -Force -ErrorAction SilentlyContinue
-          Copy-Item -Path "$env:BACKEND_PATH\*" -Destination $env:BACKEND_IIS -Recurse -Force
-
-          # iisnode web.config
-          $backendWebConfig = Join-Path $env:BACKEND_IIS "web.config"
-          @"
-<configuration>
-  <system.webServer>
-    <handlers>
-      <add name='iisnode' path='server.js' verb='*' modules='iisnode'/>
-    </handlers>
-    <rewrite>
-      <rules>
-        <rule name='Nodejs' stopProcessing='true'>
-          <match url='.*' />
-          <action type='Rewrite' url='server.js'/>
-        </rule>
-      </rules>
-    </rewrite>
-    <iisnode nodeProcessCommandLine='C:\Program Files\nodejs\node.exe' />
-  </system.webServer>
-</configuration>
-"@ | Out-File -FilePath $backendWebConfig -Encoding UTF8
-
-          Write-Host "✅ Backend deployed."
-
-      - name: Restart IIS
-        shell: powershell
-        run: |
-          Write-Host "=== Restarting IIS ==="
-          iisreset
-          Write-Host "✅ IIS restarted. Juice Shop frontend and backend are live!"
+          Write-Host "✅ Workflow triggered successfully!"
+          Write-Host "Hostname: $(hostname)"
+          Write-Host "User: $env:USERNAME"
+          Write-Host "Current directory: $(pwd)"
