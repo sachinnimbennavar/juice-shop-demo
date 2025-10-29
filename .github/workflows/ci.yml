@@ -1,18 +1,18 @@
-name: Juice Shop IIS Full Deployment
+name: Juice Shop IIS Deployment
 
 on:
-  workflow_dispatch:  # Manual trigger
+  workflow_dispatch:  # This ensures the workflow shows up for manual trigger
 
 jobs:
-  deploy-iis:
-    runs-on: self-hosted  # Your Windows machine with IIS + ARR + iisnode
+  deploy:
+    runs-on: self-hosted
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-        with:
-          fetch-depth: 1
+      # 1️⃣ Initial test message to confirm workflow_dispatch works
+      - name: Print test message
+        run: echo "✅ Workflow triggered successfully on $(hostname)"
 
+      # 2️⃣ Set Paths for IIS deployment
       - name: Set Paths and URLs
         shell: powershell
         run: |
@@ -24,34 +24,29 @@ jobs:
           $env:SITE_NAME_FRONTEND = "JuiceShopFrontend"
           $env:SITE_NAME_BACKEND = "JuiceShopBackend"
 
-      # 1️⃣ Deploy Frontend
+      # 3️⃣ Deploy Frontend
       - name: Deploy Frontend to IIS
         shell: powershell
         run: |
           Write-Host "=== Juice Shop Frontend Deployment Started ==="
           Import-Module WebAdministration
 
-          # Remove existing site if exists
           $site = Get-Website -Name $env:SITE_NAME_FRONTEND -ErrorAction SilentlyContinue
           if ($null -ne $site) { Remove-Website -Name $env:SITE_NAME_FRONTEND }
 
-          # Clear or create folder
           if (Test-Path $env:FRONTEND_IIS_PATH) {
               Get-ChildItem $env:FRONTEND_IIS_PATH -Recurse -Force | Remove-Item -Force -Recurse
           } else {
               New-Item -ItemType Directory -Path $env:FRONTEND_IIS_PATH -Force | Out-Null
           }
 
-          # Copy frontend files
           Copy-Item -Path (Join-Path $env:FRONTEND_SOURCE '*') -Destination $env:FRONTEND_IIS_PATH -Recurse -Force
 
-          # Update environment.prod.js API URL
           $envFile = Join-Path $env:FRONTEND_IIS_PATH "assets\environment.prod.js"
           if (Test-Path $envFile) {
               (Get-Content $envFile) -replace 'apiUrl\s*:\s*["\'].*["\']', "apiUrl: '$env:BACKEND_URL'" | Set-Content $envFile
           }
 
-          # Create Angular web.config for routing
           $webConfigPath = Join-Path $env:FRONTEND_IIS_PATH "web.config"
           @"
 <configuration>
@@ -72,32 +67,27 @@ jobs:
 </configuration>
 "@ | Out-File -FilePath $webConfigPath -Encoding UTF8
 
-          # Create IIS site
           New-Website -Name $env:SITE_NAME_FRONTEND -Port 8081 -PhysicalPath $env:FRONTEND_IIS_PATH -Force | Out-Null
           Write-Host "=== Frontend Deployment Completed ==="
 
-      # 2️⃣ Deploy Backend
+      # 4️⃣ Deploy Backend
       - name: Deploy Backend to IIS
         shell: powershell
         run: |
           Write-Host "=== Juice Shop Backend Deployment Started ==="
           Import-Module WebAdministration
 
-          # Remove existing site if exists
           $site = Get-Website -Name $env:SITE_NAME_BACKEND -ErrorAction SilentlyContinue
           if ($null -ne $site) { Remove-Website -Name $env:SITE_NAME_BACKEND }
 
-          # Clear or create folder
           if (Test-Path $env:BACKEND_IIS_PATH) {
               Get-ChildItem $env:BACKEND_IIS_PATH -Recurse -Force | Remove-Item -Force -Recurse
           } else {
               New-Item -ItemType Directory -Path $env:BACKEND_IIS_PATH -Force | Out-Null
           }
 
-          # Copy backend files
           Copy-Item -Path (Join-Path $env:BACKEND_SOURCE '*') -Destination $env:BACKEND_IIS_PATH -Recurse -Force
 
-          # Create iisnode web.config
           $backendWebConfig = Join-Path $env:BACKEND_IIS_PATH "web.config"
           @"
 <configuration>
@@ -118,11 +108,10 @@ jobs:
 </configuration>
 "@ | Out-File -FilePath $backendWebConfig -Encoding UTF8
 
-          # Create IIS site
           New-Website -Name $env:SITE_NAME_BACKEND -Port 8080 -PhysicalPath $env:BACKEND_IIS_PATH -Force | Out-Null
           Write-Host "=== Backend Deployment Completed ==="
 
-      # 3️⃣ Restart IIS
+      # 5️⃣ Restart IIS
       - name: Restart IIS
         shell: powershell
         run: |
