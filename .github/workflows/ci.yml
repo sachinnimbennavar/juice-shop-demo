@@ -1,77 +1,72 @@
-name: Juice Shop Frontend + Backend Deployment
+name: Juice Shop IIS Deployment
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # Manual trigger
 
 jobs:
-  build-and-deploy:
+  deploy-to-iis:
     runs-on: self-hosted
 
-    env:
-      FRONTEND_PATH: "C:\\SSDLC\\Nexus_Unzips\\frontend"
-      DIST_PATH: "C:\\SSDLC\\Nexus_Unzips\\frontend\\dist"
-      IIS_PATH: "C:\\inetpub\\wwwroot\\JuiceShop"
-      SITE_NAME: "JuiceShopSite"
-      BACKEND_PATH: "C:\\SSDLC\\Nexus_Unzips\\server"
-      SERVICE_NAME: "JuiceShopBackend"
-
     steps:
-      - name: Check Node.js version
-        run: node -v
-
-      - name: Install frontend dependencies
-        working-directory: ${{ env.FRONTEND_PATH }}
-        run: npm ci
-
-      - name: Build frontend (4GB memory)
-        working-directory: ${{ env.FRONTEND_PATH }}
+      - name: Build and Deploy Frontend to IIS
+        shell: powershell
+        env:
+          BUILD_PATH: C:\SSDLC\Nexus_Unzips\frontend
+          IIS_PATH: C:\inetpub\wwwroot\JuiceShop
         run: |
-          setx NODE_OPTIONS "--max-old-space-size=4096"
-          npm run build -- --configuration production --watch=false --verbose
+          Write-Host "[INFO] Starting IIS Frontend Deployment..."
 
-      - name: Deploy frontend to IIS
-        shell: pwsh
-        run: |
+          if (-Not (Test-Path $env:BUILD_PATH)) {
+              Write-Error "Frontend folder not found at $env:BUILD_PATH"
+              exit 1
+          }
+
+          Write-Host "[INFO] Installing dependencies..."
+          cd $env:BUILD_PATH
+          npm install --legacy-peer-deps --no-audit
+
+          Write-Host "[INFO] Building Angular frontend..."
+          $env:NODE_OPTIONS="--max_old_space_size=4096"
+          npx ng build --configuration production --verbose
+
+          $distPath = Join-Path $env:BUILD_PATH "dist"
+          if (-Not (Test-Path $distPath)) {
+              Write-Error "Frontend build failed: dist folder not found."
+              exit 1
+          }
+
+          Write-Host "[INFO] Preparing IIS deployment folder..."
           Import-Module WebAdministration -ErrorAction Stop
-          
-          Write-Host "[INFO] Deploying Juice Shop frontend to IIS..."
-          if (Test-Path $env:IIS_PATH) {
-            Remove-Item -Recurse -Force -Path (Join-Path $env:IIS_PATH '*')
+          if (-Not (Test-Path $env:IIS_PATH)) {
+              New-Item -ItemType Directory -Path $env:IIS_PATH -Force | Out-Null
           } else {
-            New-Item -ItemType Directory -Path $env:IIS_PATH | Out-Null
+              Remove-Item -Path "$env:IIS_PATH\*" -Recurse -Force
           }
 
-          $distFolder = (Get-ChildItem -Path $env:DIST_PATH -Directory | Select-Object -First 1).FullName
-          Copy-Item -Path (Join-Path $distFolder '*') -Destination $env:IIS_PATH -Recurse -Force
+          Write-Host "[INFO] Copying frontend build to IIS path..."
+          Copy-Item -Path (Join-Path $distPath '*') -Destination $env:IIS_PATH -Recurse -Force
 
-          if (-not (Get-Website | Where-Object { $_.Name -eq $env:SITE_NAME })) {
-            New-Website -Name $env:SITE_NAME -Port 8080 -PhysicalPath $env:IIS_PATH -ApplicationPool "DefaultAppPool"
+          if (-Not (Get-Website | Where-Object { $_.Name -eq "JuiceShopSite" })) {
+              Write-Host "[INFO] Creating IIS site JuiceShopSite on port 8080..."
+              New-Website -Name "JuiceShopSite" -Port 8080 -PhysicalPath $env:IIS_PATH -Force | Out-Null
           } else {
-            Restart-WebAppPool -Name "DefaultAppPool"
+              Write-Host "[INFO] Restarting existing IIS site JuiceShopSite..."
+              Restart-WebAppPool -Name "JuiceShopSite"
           }
 
-          Write-Host "[INFO] Frontend deployed successfully to IIS on port 8080."
+          Write-Host "✅ IIS Frontend deployment completed successfully."
 
-      - name: Setup or restart Node.js backend as Windows Service
-        shell: pwsh
+      - name: (Optional) Run Node.js Server as a Windows Service
+        shell: powershell
+        env:
+          SERVER_PATH: C:\SSDLC\Nexus_Unzips
         run: |
-          Write-Host "[INFO] Configuring Node.js backend as Windows service..."
-          $serviceExe = "C:\\Program Files\\nssm\\win64\\nssm.exe"
-
-          if (!(Test-Path $serviceExe)) {
-            Write-Host "[INFO] nssm not found, please install it from https://nssm.cc/download"
-            exit 1
+          Write-Host "[INFO] Starting Node.js server as a background service..."
+          cd $env:SERVER_PATH
+          if (Test-Path "server.js") {
+              Write-Host "[INFO] Launching Node server..."
+              Start-Process "node" "server.js" -WindowStyle Hidden
+              Write-Host "✅ Node.js server started successfully."
+          } else {
+              Write-Host "[WARN] server.js not found — skipping Node service start."
           }
-
-          if (Get-Service -Name $env:SERVICE_NAME -ErrorAction SilentlyContinue) {
-            Write-Host "[INFO] Restarting existing service..."
-            nssm stop $env:SERVICE_NAME
-            nssm remove $env:SERVICE_NAME confirm
-          }
-
-          nssm install $env:SERVICE_NAME "C:\\Program Files\\nodejs\\node.exe" "$env:BACKEND_PATH\\server.js"
-          nssm set $env:SERVICE_NAME AppDirectory $env:BACKEND_PATH
-          nssm set $env:SERVICE_NAME Start SERVICE_AUTO_START
-          nssm start $env:SERVICE_NAME
-
-          Write-Host "[INFO] Backend service '$env:SERVICE_NAME' started successfully."
