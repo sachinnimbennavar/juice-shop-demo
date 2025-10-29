@@ -14,29 +14,42 @@ jobs:
         with:
           fetch-depth: 1
 
-      # 2️⃣ Install frontend dependencies
+      # 2️⃣ Fix missing provider-metadata.json file error
+      - name: Create missing provider-metadata.json to avoid ENOENT error
+        shell: powershell
+        run: |
+          $path = ".\.well-known\csaf"
+          if (-not (Test-Path $path)) {
+            New-Item -ItemType Directory -Force -Path $path
+          }
+          $file = "$path\provider-metadata.json"
+          if (-not (Test-Path $file)) {
+            '{}' | Out-File -Encoding utf8 $file
+          }
+
+      # 3️⃣ Install frontend dependencies
       - name: Install frontend dependencies
         run: |
           cd frontend
           npm install --legacy-peer-deps
           cd ..
 
-      # 3️⃣ Build frontend
+      # 4️⃣ Build frontend
       - name: Build frontend
         run: |
           cd frontend
           npm run build -- --configuration production
           cd ..
 
-      # 4️⃣ Install server dependencies
+      # 5️⃣ Install server dependencies
       - name: Install server dependencies
         run: npm install --prefer-offline --no-audit
 
-      # 5️⃣ Build server
+      # 6️⃣ Build server
       - name: Build server
         run: npm run build:server
 
-      # 6️⃣ IIS Deployment
+      # 7️⃣ IIS Deployment
       - name: Juice Shop IIS Deployment
         shell: powershell
         env:
