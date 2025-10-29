@@ -1,47 +1,97 @@
-name: Juice Shop IIS Deployment
+name: Juice Shop IIS Full Deployment
 
 on:
-  workflow_dispatch:  # Manual trigger
+  workflow_dispatch:
 
 jobs:
-  deploy:
+  build-and-deploy:
     runs-on: self-hosted
 
     steps:
-      # 1️⃣ Test workflow dispatch
-      - name: Print test message
-        run: echo "✅ Workflow triggered successfully on $(hostname)"
+      # 1️⃣ Checkout repository
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 1
 
-      # 2️⃣ IIS Deployment (frontend & backend) from existing unzipped folder
-      - name: Deploy Frontend & Backend to IIS
-        shell: powershell
+      # 2️⃣ Install frontend dependencies
+      - name: Install frontend dependencies
         run: |
+          cd frontend
+          npm install --legacy-peer-deps
+          cd ..
+
+      # 3️⃣ Build frontend
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm run build -- --configuration production
+          cd ..
+
+      # 4️⃣ Install server dependencies
+      - name: Install server dependencies
+        run: npm install --prefer-offline --no-audit
+
+      # 5️⃣ Build server
+      - name: Build server
+        run: npm run build:server
+
+      # 6️⃣ IIS Deployment
+      - name: Juice Shop IIS Deployment
+        shell: powershell
+        env:
+          DEPLOY_PATH: C:\SSDLC\Nexus_Unzips
+          IIS_SITE_NAME: JuiceShopDemo
+          IIS_ROOT: C:\inetpub\wwwroot
+          FRONTEND_SOURCE: C:\SSDLC\Nexus_Unzips\frontend\dist\frontend
+          SERVER_SOURCE: C:\SSDLC\Nexus_Unzips\server
+        run: |
+          Write-Host "=== Juice Shop IIS Deployment Started ==="
+
           Import-Module WebAdministration
 
-          # Frontend
-          $FE_SRC = "C:\SSDLC\Nexus_Unzips\frontend\dist\frontend"
-          $FE_DEST = "C:\inetpub\wwwroot\JuiceShopFrontend"
-          if (-Not (Test-Path $FE_SRC)) { 
-              Write-Error "Frontend source path not found: $FE_SRC"; exit 1 
+          # Stop existing IIS site if it exists
+          $site = Get-Website -Name $env:IIS_SITE_NAME -ErrorAction SilentlyContinue
+          if ($null -ne $site) {
+              Write-Host "[INFO] Stopping existing IIS site $($env:IIS_SITE_NAME)..."
+              Stop-Website -Name $env:IIS_SITE_NAME
           }
-          if (-Not (Test-Path $FE_DEST)) { New-Item -ItemType Directory -Path $FE_DEST | Out-Null }
-          Remove-Item "$FE_DEST\*" -Recurse -Force -ErrorAction SilentlyContinue
-          Copy-Item "$FE_SRC\*" $FE_DEST -Recurse
-          $siteFE = Get-Website -Name "JuiceShopFrontend" -ErrorAction SilentlyContinue
-          if ($null -ne $siteFE) { Stop-Website -Name "JuiceShopFrontend"; Start-Website -Name "JuiceShopFrontend" }
-          else { New-Website -Name "JuiceShopFrontend" -Port 8081 -PhysicalPath $FE_DEST | Out-Null }
 
-          # Backend
-          $BE_SRC = "C:\SSDLC\Nexus_Unzips\server"
-          $BE_DEST = "C:\inetpub\wwwroot\JuiceShopBackend"
-          if (-Not (Test-Path $BE_SRC)) { 
-              Write-Error "Backend source path not found: $BE_SRC"; exit 1 
+          # Create IIS root folder if missing
+          $iisPath = Join-Path $env:IIS_ROOT $env:IIS_SITE_NAME
+          if (-Not (Test-Path $iisPath)) {
+              Write-Host "[INFO] Creating IIS directory $iisPath..."
+              New-Item -ItemType Directory -Path $iisPath -Force | Out-Null
           }
-          if (-Not (Test-Path $BE_DEST)) { New-Item -ItemType Directory -Path $BE_DEST | Out-Null }
-          Remove-Item "$BE_DEST\*" -Recurse -Force -ErrorAction SilentlyContinue
-          Copy-Item "$BE_SRC\*" $BE_DEST -Recurse
-          $siteBE = Get-Website -Name "JuiceShopBackend" -ErrorAction SilentlyContinue
-          if ($null -ne $siteBE) { Stop-Website -Name "JuiceShopBackend"; Start-Website -Name "JuiceShopBackend" }
-          else { New-Website -Name "JuiceShopBackend" -Port 8080 -PhysicalPath $BE_DEST | Out-Null }
 
-          Write-Host "✅ Frontend and Backend deployed to IIS successfully!"
+          # Clear IIS folder
+          Write-Host "[INFO] Clearing existing files from $iisPath..."
+          Get-ChildItem $iisPath -Recurse -Force | Remove-Item -Force -Recurse
+
+          # Copy frontend
+          if (Test-Path $env:FRONTEND_SOURCE) {
+              Write-Host "[INFO] Copying frontend from $($env:FRONTEND_SOURCE) to $iisPath..."
+              Copy-Item -Path (Join-Path $env:FRONTEND_SOURCE '*') -Destination $iisPath -Recurse -Force
+          } else {
+              Write-Host "[WARNING] Frontend build folder not found: $($env:FRONTEND_SOURCE)"
+          }
+
+          # Copy server
+          if (Test-Path $env:SERVER_SOURCE) {
+              Write-Host "[INFO] Copying server from $($env:SERVER_SOURCE) to $iisPath..."
+              Copy-Item -Path (Join-Path $env:SERVER_SOURCE '*') -Destination $iisPath -Recurse -Force
+          } else {
+              Write-Host "[WARNING] Server build folder not found: $($env:SERVER_SOURCE)"
+          }
+
+          # Start IIS site or create if missing
+          $site = Get-Website -Name $env:IIS_SITE_NAME -ErrorAction SilentlyContinue
+          if ($null -ne $site) {
+              Write-Host "[INFO] Starting IIS site $($env:IIS_SITE_NAME)..."
+              Start-Website -Name $env:IIS_SITE_NAME
+          } else {
+              Write-Host "[INFO] Creating new IIS site $($env:IIS_SITE_NAME) on port 8080..."
+              New-Website -Name $env:IIS_SITE_NAME -Port 8080 -PhysicalPath $iisPath -Force | Out-Null
+          }
+
+          Write-Host "=== Deployment Completed Successfully ==="
