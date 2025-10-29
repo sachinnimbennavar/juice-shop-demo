@@ -1,51 +1,39 @@
-name: Juice Shop IIS Full Deployment
+name: Juice Shop IIS Deployment
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # Manual trigger
 
 jobs:
   deploy-iis:
-    runs-on: self-hosted  # Windows machine with IIS + ARR + iisnode
+    runs-on: self-hosted  # Your Windows machine with IIS + ARR + iisnode
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-        with:
-          fetch-depth: 1
-
-      - name: Deploy Frontend and Backend to IIS
+      - name: Set Paths
         shell: powershell
         run: |
-          Write-Host "=== Juice Shop IIS Deployment Started ==="
+          $env:FRONTEND_PATH = "C:\SSDLC\Nexus_Unzips\frontend\dist\frontend"
+          $env:BACKEND_PATH = "C:\SSDLC\Nexus_Unzips\server"
+          $env:FRONTEND_IIS = "C:\inetpub\wwwroot\JuiceShopFrontend"
+          $env:BACKEND_IIS = "C:\inetpub\wwwroot\JuiceShopBackend"
+          $env:BACKEND_URL = "http://localhost/JuiceShopBackend"
 
-          # Paths
-          $frontendSource = "C:\SSDLC\Nexus_Unzips\frontend\dist\frontend"
-          $frontendIIS = "C:\inetpub\wwwroot\JuiceShopFrontend"
-          $frontendSite = "JuiceShopFrontend"
-          $frontendPort = 8081
+      - name: Deploy Frontend
+        shell: powershell
+        run: |
+          Import-Module WebAdministration
+          Write-Host "=== Deploying Frontend ==="
+          if (-Not (Test-Path $env:FRONTEND_IIS)) { New-Item -ItemType Directory -Path $env:FRONTEND_IIS | Out-Null }
+          Remove-Item -Path "$env:FRONTEND_IIS\*" -Recurse -Force -ErrorAction SilentlyContinue
+          Copy-Item -Path "$env:FRONTEND_PATH\*" -Destination $env:FRONTEND_IIS -Recurse -Force
 
-          $backendSource = "C:\SSDLC\Nexus_Unzips\server"
-          $backendIIS = "C:\inetpub\wwwroot\JuiceShopBackend"
-          $backendSite = "JuiceShopBackend"
-          $backendPort = 8080
-          $backendUrl = "http://localhost/$backendSite"
-
-          Import-Module WebAdministration -ErrorAction Stop
-
-          ###### Frontend Deployment ######
-          Write-Host "Deploying frontend..."
-          if (-Not (Test-Path $frontendIIS)) { New-Item -ItemType Directory -Path $frontendIIS | Out-Null }
-          Remove-Item -Path "$frontendIIS\*" -Recurse -Force -ErrorAction SilentlyContinue
-          Copy-Item -Path "$frontendSource\*" -Destination $frontendIIS -Recurse -Force
-
-          # Update API URL
-          $envFile = Join-Path $frontendIIS "assets\environment.prod.js"
+          # Update API URL in environment.prod.js
+          $envFile = Join-Path $env:FRONTEND_IIS "assets\environment.prod.js"
           if (Test-Path $envFile) {
-              (Get-Content $envFile) -replace 'apiUrl\s*:\s*["\'].*["\']', "apiUrl: '$backendUrl'" | Set-Content $envFile
+              (Get-Content $envFile) -replace 'apiUrl\s*:\s*["\'].*["\']', "apiUrl: '$env:BACKEND_URL'" | Set-Content $envFile
           }
 
           # Angular routing web.config
-          $webConfigPath = Join-Path $frontendIIS "web.config"
+          $webConfigPath = Join-Path $env:FRONTEND_IIS "web.config"
           @"
 <configuration>
   <system.webServer>
@@ -65,25 +53,18 @@ jobs:
 </configuration>
 "@ | Out-File -FilePath $webConfigPath -Encoding UTF8
 
-          # Create or update frontend site
-          $site = Get-Website -Name $frontendSite -ErrorAction SilentlyContinue
-          if ($null -eq $site) {
-              Write-Host "Creating new IIS site for frontend on port $frontendPort..."
-              New-Website -Name $frontendSite -Port $frontendPort -PhysicalPath $frontendIIS -Force | Out-Null
-          } else {
-              Write-Host "Updating existing frontend IIS site..."
-              Set-ItemProperty "IIS:\Sites\$frontendSite" -Name physicalPath -Value $frontendIIS
-          }
-          Write-Host "✅ Frontend deployed successfully."
+          Write-Host "✅ Frontend deployed."
 
-          ###### Backend Deployment ######
-          Write-Host "Deploying backend..."
-          if (-Not (Test-Path $backendIIS)) { New-Item -ItemType Directory -Path $backendIIS | Out-Null }
-          Remove-Item -Path "$backendIIS\*" -Recurse -Force -ErrorAction SilentlyContinue
-          Copy-Item -Path "$backendSource\*" -Destination $backendIIS -Recurse -Force
+      - name: Deploy Backend
+        shell: powershell
+        run: |
+          Write-Host "=== Deploying Backend ==="
+          if (-Not (Test-Path $env:BACKEND_IIS)) { New-Item -ItemType Directory -Path $env:BACKEND_IIS | Out-Null }
+          Remove-Item -Path "$env:BACKEND_IIS\*" -Recurse -Force -ErrorAction SilentlyContinue
+          Copy-Item -Path "$env:BACKEND_PATH\*" -Destination $env:BACKEND_IIS -Recurse -Force
 
           # iisnode web.config
-          $backendWebConfig = Join-Path $backendIIS "web.config"
+          $backendWebConfig = Join-Path $env:BACKEND_IIS "web.config"
           @"
 <configuration>
   <system.webServer>
@@ -103,18 +84,11 @@ jobs:
 </configuration>
 "@ | Out-File -FilePath $backendWebConfig -Encoding UTF8
 
-          # Create or update backend site
-          $site = Get-Website -Name $backendSite -ErrorAction SilentlyContinue
-          if ($null -eq $site) {
-              Write-Host "Creating new IIS site for backend on port $backendPort..."
-              New-Website -Name $backendSite -Port $backendPort -PhysicalPath $backendIIS -Force | Out-Null
-          } else {
-              Write-Host "Updating existing backend IIS site..."
-              Set-ItemProperty "IIS:\Sites\$backendSite" -Name physicalPath -Value $backendIIS
-          }
-          Write-Host "✅ Backend deployed successfully."
+          Write-Host "✅ Backend deployed."
 
-          ###### Restart IIS ######
-          Write-Host "Restarting IIS..."
+      - name: Restart IIS
+        shell: powershell
+        run: |
+          Write-Host "=== Restarting IIS ==="
           iisreset
-          Write-Host "=== Deployment Completed Successfully ==="
+          Write-Host "✅ IIS restarted. Juice Shop frontend and backend are live!"
