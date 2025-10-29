@@ -1,11 +1,103 @@
-name: Juice Shop Deployment Test
+name: Juice Shop IIS Full Deployment
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # Manual trigger
 
 jobs:
   deploy:
+    name: Deploy Juice Shop to IIS
     runs-on: self-hosted
+
     steps:
-      - name: Print test message
-        run: echo "✅ Workflow triggered successfully on $(hostname)"
+      # 1️⃣ Deployment: Download latest Nexus ZIP and extract
+      - name: Download and Extract Latest Nexus ZIP
+        shell: powershell
+        env:
+          NEXUS_URL: http://127.0.0.1:8081
+          NEXUS_REPO: JuiceShopMavenDemo
+          DEPLOY_PATH: C:\SSDLC\Nexus_Unzips
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+        run: |
+          Write-Host "=== Juice Shop Deployment Started ==="
+          # Prepare deployment folder
+          if (Test-Path $env:DEPLOY_PATH) {
+              Write-Host "Clearing old files from $env:DEPLOY_PATH ..."
+              Remove-Item -Path "$env:DEPLOY_PATH\*" -Recurse -Force
+          } else {
+              Write-Host "Creating deployment path $env:DEPLOY_PATH ..."
+              New-Item -ItemType Directory -Path $env:DEPLOY_PATH -Force | Out-Null
+          }
+
+          # Prepare authentication
+          $base64Auth = [System.Convert]::ToBase64String(
+              [System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}")
+          )
+          $headers = @{ Authorization = "Basic $base64Auth" }
+
+          # Query Nexus for latest full-repo ZIP
+          $apiUrl = "${env:NEXUS_URL}/service/rest/v1/search?repository=${env:NEXUS_REPO}&group=com.example.juiceshop&name=full-repo"
+          Write-Host "Fetching versions from $apiUrl ..."
+          $response = Invoke-RestMethod -Uri $apiUrl -Headers $headers -Method Get
+
+          if (-not $response.items) {
+              Write-Error "No artifacts found in Nexus!"
+              exit 1
+          }
+
+          $latest = $response.items | Sort-Object { $_.version } -Descending | Select-Object -First 1
+          $latestVersion = $latest.version
+          $zipDownloadUrl = $latest.assets[0].downloadUrl
+
+          Write-Host "Latest Version: $latestVersion"
+          Write-Host "Downloading from: $zipDownloadUrl"
+
+          $zipFilePath = Join-Path $env:DEPLOY_PATH "full-repo-$latestVersion.zip"
+          Invoke-WebRequest -Uri $zipDownloadUrl -OutFile $zipFilePath -Headers $headers
+
+          if (-not (Test-Path $zipFilePath)) {
+              Write-Error "Failed to download ZIP!"
+              exit 1
+          }
+
+          Write-Host "Extracting ZIP to $env:DEPLOY_PATH ..."
+          Expand-Archive -Path $zipFilePath -DestinationPath $env:DEPLOY_PATH -Force
+          Write-Host "✅ Extraction complete."
+
+      # 2️⃣ IIS Deployment
+      - name: Deploy to IIS
+        shell: powershell
+        run: |
+          Import-Module WebAdministration
+
+          $siteName = "JuiceShopDemo"
+          $source = "C:\SSDLC\Nexus_Unzips"
+          $destination = "C:\inetpub\wwwroot\JuiceShopDemo"
+
+          Write-Host "Stopping IIS site if running..."
+          if (Test-Path "IIS:\Sites\$siteName") {
+              Stop-Website -Name $siteName
+              Write-Host "✅ Site stopped."
+          } else {
+              Write-Host "⚠️ IIS site $siteName not found — will create it."
+          }
+
+          Write-Host "Deploying files to IIS path..."
+          if (Test-Path $destination) {
+              Remove-Item -Path "$destination\*" -Recurse -Force
+          } else {
+              New-Item -ItemType Directory -Path $destination -Force | Out-Null
+          }
+          Copy-Item -Path "$source\*" -Destination $destination -Recurse -Force
+          Write-Host "✅ Files copied successfully."
+
+          Write-Host "Starting IIS site..."
+          if (-not (Test-Path "IIS:\Sites\$siteName")) {
+              New-Website -Name $siteName -Port 8080 -PhysicalPath $destination -Force
+              Write-Host "✅ New site created: $siteName (Port 8080)"
+          } else {
+              Start-Website -Name $siteName
+              Write-Host "✅ Site started successfully."
+          }
+
+          Write-Host "=== Deployment Completed Successfully ==="
