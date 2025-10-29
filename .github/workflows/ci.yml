@@ -4,7 +4,7 @@ on:
   workflow_dispatch:  # Manual trigger only
 
 jobs:
-  build-deploy-service:
+  build-and-deploy:
     runs-on: self-hosted
 
     steps:
@@ -41,33 +41,4 @@ jobs:
               Write-Host "JuiceShopSite not found — skipping restart."
           }
 
-      - name: Run Node.js server as Windows Service
-        shell: pwsh
-        run: |
-          Write-Host "[INFO] Setting up Windows Service for Node.js..."
-          $serviceName = "JuiceShopNodeService"
-          $nssmPath = "C:\Tools\nssm.exe"  # Ensure nssm.exe exists here
-          $nodeExe = "C:\Program Files\nodejs\node.exe"
-          $appDir = "C:\SSDLC\Nexus_Unzips"
-          $serverFile = "server.js"
-
-          if (!(Test-Path $nssmPath)) {
-            Write-Host "[ERROR] NSSM not found at $nssmPath. Please install NSSM and re-run."
-            exit 1
-          }
-
-          if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {
-            Write-Host "[INFO] Service already exists — restarting..."
-            & $nssmPath stop $serviceName
-            Start-Sleep -Seconds 3
-            & $nssmPath start $serviceName
-          } else {
-            Write-Host "[INFO] Creating new service..."
-            & $nssmPath install $serviceName $nodeExe "$appDir\$serverFile"
-            & $nssmPath set $serviceName AppDirectory $appDir
-            & $nssmPath set $serviceName Start SERVICE_AUTO_START
-            & $nssmPath start $serviceName
-          }
-
-          Write-Host "[INFO] Node.js service status:"
-          Get-Service -Name $serviceName
+          Write-Host "[INFO] IIS deployment completed successfully."
