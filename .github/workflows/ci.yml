@@ -1,10 +1,10 @@
-name: Juice Shop CI/CD Full Pipeline with Service
+name: Juice Shop CI/CD IIS Deployment
 
 on:
   workflow_dispatch:  # Manual trigger only
 
 jobs:
-  build-deploy-run:
+  build-deploy-service:
     runs-on: self-hosted
 
     steps:
@@ -15,15 +15,15 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
 
       - name: Build frontend
         working-directory: ./frontend
         run: |
-          npm install
-          npm run build
+          npm install --legacy-peer-deps --no-audit
+          npm run build -- --configuration production --watch=false
 
       - name: Deploy frontend to IIS
+        shell: pwsh
         run: |
           Write-Host "[INFO] Preparing IIS deployment folder..."
           $iisPath = "C:\inetpub\wwwroot\JuiceShop"
