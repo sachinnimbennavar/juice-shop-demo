@@ -1,17 +1,114 @@
-name: Test Self-Hosted Runner
+name: Juice Shop IIS Deployment
 
 on:
   workflow_dispatch:  # Manual trigger
 
 jobs:
-  runner-check:
+  deploy-iis:
     runs-on: self-hosted  # Your Windows self-hosted runner
 
     steps:
       - name: Print Runner Info
         shell: powershell
         run: |
-          Write-Host "✅ Workflow triggered successfully!"
-          Write-Host "Hostname: $(hostname)"
+          Write-Host "✅ Workflow triggered successfully on $(hostname)"
           Write-Host "User: $env:USERNAME"
           Write-Host "Current directory: $(pwd)"
+
+      - name: Import IIS Module
+        shell: powershell
+        run: Import-Module WebAdministration
+
+      - name: Set Deployment Paths
+        shell: powershell
+        run: |
+          $env:DEPLOY_PATH = "C:\SSDLC\Nexus_Unzips"
+          $env:FRONTEND_IIS_PATH = "C:\inetpub\wwwroot\JuiceShopFrontend"
+          $env:BACKEND_IIS_PATH = "C:\inetpub\wwwroot\JuiceShopBackend"
+          $env:SITE_NAME_FRONTEND = "JuiceShopFrontend"
+          $env:SITE_NAME_BACKEND = "JuiceShopBackend"
+
+      - name: Deploy Frontend to IIS
+        shell: powershell
+        run: |
+          Write-Host "=== Deploying Frontend ==="
+          if (-Not (Test-Path $env:FRONTEND_IIS_PATH)) { New-Item -ItemType Directory -Path $env:FRONTEND_IIS_PATH | Out-Null }
+          Remove-Item -Path "$env:FRONTEND_IIS_PATH\*" -Recurse -Force -ErrorAction SilentlyContinue
+          Copy-Item -Path "$env:DEPLOY_PATH\frontend\dist\frontend\*" -Destination $env:FRONTEND_IIS_PATH -Recurse
+          Write-Host "✅ Frontend files copied"
+
+          # Angular routing web.config
+          $webConfigPath = Join-Path $env:FRONTEND_IIS_PATH "web.config"
+          @"
+<configuration>
+  <system.webServer>
+    <rewrite>
+      <rules>
+        <rule name='Angular Routes' stopProcessing='true'>
+          <match url='.*' />
+          <conditions logicalGrouping='MatchAll'>
+            <add input='{REQUEST_FILENAME}' matchType='IsFile' negate='true' />
+            <add input='{REQUEST_FILENAME}' matchType='IsDirectory' negate='true' />
+          </conditions>
+          <action type='Rewrite' url='/index.html' />
+        </rule>
+      </rules>
+    </rewrite>
+  </system.webServer>
+</configuration>
+"@ | Out-File -FilePath $webConfigPath -Encoding UTF8
+
+          # Start or create IIS site
+          $site = Get-Website -Name $env:SITE_NAME_FRONTEND -ErrorAction SilentlyContinue
+          if ($null -eq $site) {
+              New-Website -Name $env:SITE_NAME_FRONTEND -Port 8081 -PhysicalPath $env:FRONTEND_IIS_PATH -Force | Out-Null
+          } else {
+              Start-Website -Name $env:SITE_NAME_FRONTEND
+          }
+          Write-Host "✅ Frontend deployed and running on IIS"
+
+      - name: Deploy Backend to IIS
+        shell: powershell
+        run: |
+          Write-Host "=== Deploying Backend ==="
+          if (-Not (Test-Path $env:BACKEND_IIS_PATH)) { New-Item -ItemType Directory -Path $env:BACKEND_IIS_PATH | Out-Null }
+          Remove-Item -Path "$env:BACKEND_IIS_PATH\*" -Recurse -Force -ErrorAction SilentlyContinue
+          Copy-Item -Path "$env:DEPLOY_PATH\server\*" -Destination $env:BACKEND_IIS_PATH -Recurse
+          Write-Host "✅ Backend files copied"
+
+          # iisnode web.config
+          $backendWebConfig = Join-Path $env:BACKEND_IIS_PATH "web.config"
+          @"
+<configuration>
+  <system.webServer>
+    <handlers>
+      <add name='iisnode' path='server.js' verb='*' modules='iisnode'/>
+    </handlers>
+    <rewrite>
+      <rules>
+        <rule name='Nodejs' stopProcessing='true'>
+          <match url='.*' />
+          <action type='Rewrite' url='server.js'/>
+        </rule>
+      </rules>
+    </rewrite>
+    <iisnode nodeProcessCommandLine='C:\Program Files\nodejs\node.exe' />
+  </system.webServer>
+</configuration>
+"@ | Out-File -FilePath $backendWebConfig -Encoding UTF8
+
+          # Start or create IIS site
+          $site = Get-Website -Name $env:SITE_NAME_BACKEND -ErrorAction SilentlyContinue
+          if ($null -eq $site) {
+              New-Website -Name $env:SITE_NAME_BACKEND -Port 8080 -PhysicalPath $env:BACKEND_IIS_PATH -Force | Out-Null
+          } else {
+              Start-Website -Name $env:SITE_NAME_BACKEND
+          }
+          Write-Host "✅ Backend deployed and running on IIS"
+
+      - name: Restart IIS
+        shell: powershell
+        run: |
+          Write-Host "Restarting IIS..."
+          iisreset
+          Write-Host "✅ Juice Shop frontend and backend are live!"
