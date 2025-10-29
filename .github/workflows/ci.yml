@@ -1,11 +1,11 @@
 name: Juice Shop IIS Deployment
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: {}
 
 jobs:
   iis-deploy:
-    runs-on: self-hosted # Your Windows IIS server with ARR and iisnode
+    runs-on: self-hosted  # Windows machine with IIS, ARR, iisnode
 
     env:
       FRONTEND_DEPLOY: C:\SSDLC\Nexus_Unzips\frontend\dist\frontend
@@ -15,30 +15,26 @@ jobs:
       BACKEND_URL: http://localhost/JuiceShopBackend
 
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Deploy Frontend
+      - name: Deploy Frontend to IIS
         shell: powershell
         run: |
-          Write-Host "[INFO] Deploying frontend..."
           Import-Module WebAdministration -ErrorAction Stop
           if (Test-Path $env:FRONTEND_IIS) {
             Get-ChildItem $env:FRONTEND_IIS -Recurse -Force | Remove-Item -Force -Recurse
           } else {
-            New-Item -ItemType Directory -Path $env:FRONTEND_IIS -Force | Out-Null
+            New-Item -Force -ItemType Directory -Path $env:FRONTEND_IIS | Out-Null
           }
-          Copy-Item -Path (Join-Path $env:FRONTEND_DEPLOY '*') -Destination $env:FRONTEND_IIS -Recurse -Force
+          Copy-Item -Path "$env:FRONTEND_DEPLOY\*" -Destination $env:FRONTEND_IIS -Recurse -Force
 
-          # Optional: Update API URL in Angular build asset
           $envFile = Join-Path $env:FRONTEND_IIS "assets\environment.prod.js"
           if (Test-Path $envFile) {
             (Get-Content $envFile) -replace 'apiUrl\s*:\s*["''][^"''"]*["'']', "apiUrl: '$env:BACKEND_URL'" | Set-Content $envFile
           }
 
-          # Write Angular routing web.config
-          $webConfigPath = Join-Path $env:FRONTEND_IIS "web.config"
-          @"
+          $webConfigContent = @"
 <configuration>
   <system.webServer>
     <rewrite>
@@ -55,54 +51,54 @@ jobs:
     </rewrite>
   </system.webServer>
 </configuration>
-"@ | Set-Content -Path $webConfigPath -Encoding UTF8
+"@
+          $webConfigPath = Join-Path $env:FRONTEND_IIS "web.config"
+          $webConfigContent | Set-Content -Path $webConfigPath -Encoding UTF8
 
-      - name: Deploy Backend
+      - name: Deploy Backend to IIS
         shell: powershell
         run: |
-          Write-Host "[INFO] Deploying backend..."
           Import-Module WebAdministration -ErrorAction Stop
           if (Test-Path $env:BACKEND_IIS) {
             Get-ChildItem $env:BACKEND_IIS -Recurse -Force | Remove-Item -Force -Recurse
           } else {
-            New-Item -ItemType Directory -Path $env:BACKEND_IIS -Force | Out-Null
+            New-Item -Force -ItemType Directory -Path $env:BACKEND_IIS | Out-Null
           }
-          Copy-Item -Path (Join-Path $env:BACKEND_DEPLOY '*') -Destination $env:BACKEND_IIS -Recurse -Force
+          Copy-Item -Path "$env:BACKEND_DEPLOY\*" -Destination $env:BACKEND_IIS -Recurse -Force
 
-          # Write IIS iisnode web.config for Node.js entrypoint
-          $backendWebConfig = Join-Path $env:BACKEND_IIS "web.config"
-          @"
+          $backendWebConfig = @"
 <configuration>
   <system.webServer>
     <handlers>
-      <add name='iisnode' path='server.js' verb='*' modules='iisnode'/>
+      <add name='iisnode' path='server.js' verb='*' modules='iisnode' />
     </handlers>
     <rewrite>
       <rules>
         <rule name='Nodejs' stopProcessing='true'>
           <match url='.*' />
-          <action type='Rewrite' url='server.js'/>
+          <action type='Rewrite' url='server.js' />
         </rule>
       </rules>
     </rewrite>
     <iisnode nodeProcessCommandLine='C:\Program Files\nodejs\node.exe' />
   </system.webServer>
 </configuration>
-"@ | Set-Content -Path $backendWebConfig -Encoding UTF8
+"@
+          $backendWebConfigPath = Join-Path $env:BACKEND_IIS "web.config"
+          $backendWebConfig | Set-Content -Path $backendWebConfigPath -Encoding UTF8
 
       - name: Configure IIS Sites
         shell: powershell
         run: |
           Import-Module WebAdministration -ErrorAction Stop
 
-          # Frontend IIS site
           $frontendSite = Get-Website -Name "JuiceShopFrontend" -ErrorAction SilentlyContinue
           if ($null -ne $frontendSite) {
             Start-Website -Name "JuiceShopFrontend"
           } else {
             New-Website -Name "JuiceShopFrontend" -Port 8080 -PhysicalPath $env:FRONTEND_IIS -Force | Out-Null
           }
-          # Backend IIS site
+
           $backendSite = Get-Website -Name "JuiceShopBackend" -ErrorAction SilentlyContinue
           if ($null -ne $backendSite) {
             Start-Website -Name "JuiceShopBackend"
