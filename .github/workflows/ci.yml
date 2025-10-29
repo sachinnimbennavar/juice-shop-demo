@@ -1,45 +1,41 @@
 name: Juice Shop IIS Deployment
 
 on:
-  workflow_dispatch:  # Manual trigger
+  workflow_dispatch:
 
 jobs:
   deploy-iis:
-    runs-on: self-hosted  # Your Windows self-hosted runner
+    runs-on: self-hosted
 
     steps:
-      - name: Print Runner Info
-        shell: powershell
-        run: |
-          Write-Host "✅ Workflow triggered successfully on $(hostname)"
-          Write-Host "User: $env:USERNAME"
-          Write-Host "Current directory: $(pwd)"
+      # 1️⃣ Checkout repository (needed if you want version control in IIS files)
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 1
 
-      - name: Import IIS Module
-        shell: powershell
-        run: Import-Module WebAdministration
-
-      - name: Set Deployment Paths
-        shell: powershell
-        run: |
-          $env:DEPLOY_PATH = "C:\SSDLC\Nexus_Unzips"
-          $env:FRONTEND_IIS_PATH = "C:\inetpub\wwwroot\JuiceShopFrontend"
-          $env:BACKEND_IIS_PATH = "C:\inetpub\wwwroot\JuiceShopBackend"
-          $env:SITE_NAME_FRONTEND = "JuiceShopFrontend"
-          $env:SITE_NAME_BACKEND = "JuiceShopBackend"
-
+      # 2️⃣ Deploy Frontend
       - name: Deploy Frontend to IIS
         shell: powershell
         run: |
-          Write-Host "=== Deploying Frontend ==="
-          if (-Not (Test-Path $env:FRONTEND_IIS_PATH)) { New-Item -ItemType Directory -Path $env:FRONTEND_IIS_PATH | Out-Null }
-          Remove-Item -Path "$env:FRONTEND_IIS_PATH\*" -Recurse -Force -ErrorAction SilentlyContinue
-          Copy-Item -Path "$env:DEPLOY_PATH\frontend\dist\frontend\*" -Destination $env:FRONTEND_IIS_PATH -Recurse
-          Write-Host "✅ Frontend files copied"
+          $frontendSource = "C:\SSDLC\Nexus_Unzips\frontend\dist\frontend"
+          $frontendIISPath = "C:\inetpub\wwwroot\JuiceShopFrontend"
+          $backendURL = "http://localhost/JuiceShopBackend"
 
-          # Angular routing web.config
-          $webConfigPath = Join-Path $env:FRONTEND_IIS_PATH "web.config"
-          @"
+          Write-Host "[INFO] Deploying frontend..."
+          if (-Not (Test-Path $frontendIISPath)) { New-Item -ItemType Directory -Path $frontendIISPath | Out-Null }
+          Remove-Item -Path "$frontendIISPath\*" -Recurse -Force -ErrorAction SilentlyContinue
+          Copy-Item -Path "$frontendSource\*" -Destination $frontendIISPath -Recurse
+
+          # Update API URL
+          $envFile = Join-Path $frontendIISPath "assets\environment.prod.js"
+          if (Test-Path $envFile) {
+              (Get-Content $envFile) -replace 'apiUrl\s*:\s*["\'].*["\']', "apiUrl: '$backendURL'" | Set-Content $envFile
+              Write-Host "[INFO] Frontend API URL updated."
+          }
+
+          # Angular web.config for SPA routing
+          $webConfig = @"
 <configuration>
   <system.webServer>
     <rewrite>
@@ -56,29 +52,25 @@ jobs:
     </rewrite>
   </system.webServer>
 </configuration>
-"@ | Out-File -FilePath $webConfigPath -Encoding UTF8
+"@
+          $webConfigPath = Join-Path $frontendIISPath "web.config"
+          $webConfig | Out-File -FilePath $webConfigPath -Encoding UTF8
+          Write-Host "[INFO] Frontend deployed."
 
-          # Start or create IIS site
-          $site = Get-Website -Name $env:SITE_NAME_FRONTEND -ErrorAction SilentlyContinue
-          if ($null -eq $site) {
-              New-Website -Name $env:SITE_NAME_FRONTEND -Port 8081 -PhysicalPath $env:FRONTEND_IIS_PATH -Force | Out-Null
-          } else {
-              Start-Website -Name $env:SITE_NAME_FRONTEND
-          }
-          Write-Host "✅ Frontend deployed and running on IIS"
-
+      # 3️⃣ Deploy Backend
       - name: Deploy Backend to IIS
         shell: powershell
         run: |
-          Write-Host "=== Deploying Backend ==="
-          if (-Not (Test-Path $env:BACKEND_IIS_PATH)) { New-Item -ItemType Directory -Path $env:BACKEND_IIS_PATH | Out-Null }
-          Remove-Item -Path "$env:BACKEND_IIS_PATH\*" -Recurse -Force -ErrorAction SilentlyContinue
-          Copy-Item -Path "$env:DEPLOY_PATH\server\*" -Destination $env:BACKEND_IIS_PATH -Recurse
-          Write-Host "✅ Backend files copied"
+          $backendSource = "C:\SSDLC\Nexus_Unzips\server"
+          $backendIISPath = "C:\inetpub\wwwroot\JuiceShopBackend"
 
-          # iisnode web.config
-          $backendWebConfig = Join-Path $env:BACKEND_IIS_PATH "web.config"
-          @"
+          Write-Host "[INFO] Deploying backend..."
+          if (-Not (Test-Path $backendIISPath)) { New-Item -ItemType Directory -Path $backendIISPath | Out-Null }
+          Remove-Item -Path "$backendIISPath\*" -Recurse -Force -ErrorAction SilentlyContinue
+          Copy-Item -Path "$backendSource\*" -Destination $backendIISPath -Recurse
+
+          # iisnode web.config for Node.js backend
+          $backendWebConfig = @"
 <configuration>
   <system.webServer>
     <handlers>
@@ -95,20 +87,16 @@ jobs:
     <iisnode nodeProcessCommandLine='C:\Program Files\nodejs\node.exe' />
   </system.webServer>
 </configuration>
-"@ | Out-File -FilePath $backendWebConfig -Encoding UTF8
+"@
+          $backendWebConfigPath = Join-Path $backendIISPath "web.config"
+          $backendWebConfig | Out-File -FilePath $backendWebConfigPath -Encoding UTF8
+          Write-Host "[INFO] Backend deployed."
 
-          # Start or create IIS site
-          $site = Get-Website -Name $env:SITE_NAME_BACKEND -ErrorAction SilentlyContinue
-          if ($null -eq $site) {
-              New-Website -Name $env:SITE_NAME_BACKEND -Port 8080 -PhysicalPath $env:BACKEND_IIS_PATH -Force | Out-Null
-          } else {
-              Start-Website -Name $env:SITE_NAME_BACKEND
-          }
-          Write-Host "✅ Backend deployed and running on IIS"
-
+      # 4️⃣ Restart IIS
       - name: Restart IIS
         shell: powershell
         run: |
-          Write-Host "Restarting IIS..."
+          Write-Host "[INFO] Restarting IIS..."
+          Import-Module WebAdministration
           iisreset
-          Write-Host "✅ Juice Shop frontend and backend are live!"
+          Write-Host "[INFO] IIS restarted. Frontend and backend are live!"
