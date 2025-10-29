@@ -1,42 +1,51 @@
-name: Juice Shop IIS Full Deployment
+name: Juice Shop IIS Deployment
 
-# Manual trigger
 on:
   workflow_dispatch:
 
 jobs:
-  deploy-iis:
-    runs-on: self-hosted  # Windows machine with IIS + ARR + iisnode
+  iis-deploy:
+    runs-on: self-hosted  # Your Windows machine with IIS + ARR + iisnode
 
     steps:
-      # 1️⃣ Set environment paths
-      - name: Set Paths and URLs
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 1
+
+      - name: Set Environment Variables
         shell: powershell
         run: |
-          $env:FRONTEND_SOURCE = "C:\SSDLC\Nexus_Unzips\frontend\dist\frontend"
-          $env:FRONTEND_IIS_PATH = "C:\inetpub\wwwroot\JuiceShopFrontend"
-          $env:BACKEND_SOURCE = "C:\SSDLC\Nexus_Unzips\server"
-          $env:BACKEND_IIS_PATH = "C:\inetpub\wwwroot\JuiceShopBackend"
+          $env:FRONTEND_DEPLOY = "C:\SSDLC\Nexus_Unzips\frontend\dist\frontend"
+          $env:BACKEND_DEPLOY = "C:\SSDLC\Nexus_Unzips\server"
+          $env:FRONTEND_IIS = "C:\inetpub\wwwroot\JuiceShopFrontend"
+          $env:BACKEND_IIS = "C:\inetpub\wwwroot\JuiceShopBackend"
           $env:BACKEND_URL = "http://localhost/JuiceShopBackend"
 
-      # 2️⃣ Deploy frontend
+      # 1️⃣ Deploy Frontend
       - name: Deploy Frontend
         shell: powershell
         run: |
           Write-Host "[INFO] Deploying frontend..."
-          if (-Not (Test-Path $env:FRONTEND_IIS_PATH)) { New-Item -ItemType Directory -Path $env:FRONTEND_IIS_PATH | Out-Null }
-          Remove-Item -Path "$env:FRONTEND_IIS_PATH\*" -Recurse -Force -ErrorAction SilentlyContinue
-          Copy-Item -Path "$env:FRONTEND_SOURCE\*" -Destination $env:FRONTEND_IIS_PATH -Recurse
+          Import-Module WebAdministration -ErrorAction Stop
+          if (Test-Path $env:FRONTEND_IIS) {
+              Write-Host "[INFO] Clearing existing frontend files..."
+              Get-ChildItem $env:FRONTEND_IIS -Recurse -Force | Remove-Item -Force -Recurse
+          } else {
+              Write-Host "[INFO] Creating frontend IIS directory..."
+              New-Item -ItemType Directory -Path $env:FRONTEND_IIS -Force | Out-Null
+          }
+          Copy-Item -Path (Join-Path $env:FRONTEND_DEPLOY '*') -Destination $env:FRONTEND_IIS -Recurse -Force
 
-          # Update frontend API URL
-          $envFile = Join-Path $env:FRONTEND_IIS_PATH "assets\environment.prod.js"
+          # Update API URL
+          $envFile = Join-Path $env:FRONTEND_IIS "assets\environment.prod.js"
           if (Test-Path $envFile) {
               (Get-Content $envFile) -replace 'apiUrl\s*:\s*["\'].*["\']', "apiUrl: '$env:BACKEND_URL'" | Set-Content $envFile
-              Write-Host "[INFO] Frontend API URL updated to $env:BACKEND_URL"
+              Write-Host "[INFO] Frontend API URL updated."
           }
 
-          # Create Angular web.config for routing
-          $webConfigPath = Join-Path $env:FRONTEND_IIS_PATH "web.config"
+          # Angular routing web.config
+          $webConfigPath = Join-Path $env:FRONTEND_IIS "web.config"
           @"
 <configuration>
   <system.webServer>
@@ -55,19 +64,24 @@ jobs:
   </system.webServer>
 </configuration>
 "@ | Out-File -FilePath $webConfigPath -Encoding UTF8
-          Write-Host "[INFO] Frontend deployed successfully."
 
-      # 3️⃣ Deploy backend
+      # 2️⃣ Deploy Backend
       - name: Deploy Backend
         shell: powershell
         run: |
           Write-Host "[INFO] Deploying backend..."
-          if (-Not (Test-Path $env:BACKEND_IIS_PATH)) { New-Item -ItemType Directory -Path $env:BACKEND_IIS_PATH | Out-Null }
-          Remove-Item -Path "$env:BACKEND_IIS_PATH\*" -Recurse -Force -ErrorAction SilentlyContinue
-          Copy-Item -Path "$env:BACKEND_SOURCE\*" -Destination $env:BACKEND_IIS_PATH -Recurse
+          Import-Module WebAdministration -ErrorAction Stop
+          if (Test-Path $env:BACKEND_IIS) {
+              Write-Host "[INFO] Clearing existing backend files..."
+              Get-ChildItem $env:BACKEND_IIS -Recurse -Force | Remove-Item -Force -Recurse
+          } else {
+              Write-Host "[INFO] Creating backend IIS directory..."
+              New-Item -ItemType Directory -Path $env:BACKEND_IIS -Force | Out-Null
+          }
+          Copy-Item -Path (Join-Path $env:BACKEND_DEPLOY '*') -Destination $env:BACKEND_IIS -Recurse -Force
 
-          # Create iisnode web.config for Node.js backend
-          $backendWebConfig = Join-Path $env:BACKEND_IIS_PATH "web.config"
+          # Create iisnode web.config
+          $backendWebConfig = Join-Path $env:BACKEND_IIS "web.config"
           @"
 <configuration>
   <system.webServer>
@@ -86,7 +100,32 @@ jobs:
   </system.webServer>
 </configuration>
 "@ | Out-File -FilePath $backendWebConfig -Encoding UTF8
-          Write-Host "[INFO] Backend deployed successfully."
+
+      # 3️⃣ Start or Create IIS Sites
+      - name: Configure IIS Sites
+        shell: powershell
+        run: |
+          Import-Module WebAdministration -ErrorAction Stop
+          
+          # Frontend site
+          $frontendSite = Get-Website -Name "JuiceShopFrontend" -ErrorAction SilentlyContinue
+          if ($null -ne $frontendSite) {
+              Write-Host "[INFO] Starting frontend site..."
+              Start-Website -Name "JuiceShopFrontend"
+          } else {
+              Write-Host "[INFO] Creating frontend site on port 8080..."
+              New-Website -Name "JuiceShopFrontend" -Port 8080 -PhysicalPath $env:FRONTEND_IIS -Force | Out-Null
+          }
+
+          # Backend site
+          $backendSite = Get-Website -Name "JuiceShopBackend" -ErrorAction SilentlyContinue
+          if ($null -ne $backendSite) {
+              Write-Host "[INFO] Starting backend site..."
+              Start-Website -Name "JuiceShopBackend"
+          } else {
+              Write-Host "[INFO] Creating backend site on port 8081..."
+              New-Website -Name "JuiceShopBackend" -Port 8081 -PhysicalPath $env:BACKEND_IIS -Force | Out-Null
+          }
 
       # 4️⃣ Restart IIS
       - name: Restart IIS
