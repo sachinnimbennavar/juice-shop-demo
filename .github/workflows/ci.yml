@@ -1,13 +1,14 @@
 name: Juice Shop IIS Full Deployment
 
 on:
-  workflow_dispatch:  # Run manually after unzipping
+  workflow_dispatch:  # Manual trigger
 
 jobs:
   deploy-iis:
     runs-on: self-hosted  # Your Windows machine with IIS + ARR + iisnode
 
     steps:
+      # 1️⃣ Set environment paths
       - name: Set Paths and URLs
         shell: powershell
         run: |
@@ -17,7 +18,7 @@ jobs:
           $env:BACKEND_IIS_PATH = "C:\inetpub\wwwroot\JuiceShopBackend"
           $env:BACKEND_URL = "http://localhost/JuiceShopBackend"
 
-      # 1️⃣ Deploy Frontend
+      # 2️⃣ Deploy frontend
       - name: Deploy Frontend to IIS
         shell: powershell
         run: |
@@ -26,7 +27,7 @@ jobs:
           Remove-Item -Path "$env:FRONTEND_IIS_PATH\*" -Recurse -Force -ErrorAction SilentlyContinue
           Copy-Item -Path "$env:FRONTEND_SOURCE\*" -Destination $env:FRONTEND_IIS_PATH -Recurse
           
-          # Update API URL in environment.prod.js
+          # Update frontend API URL
           $envFile = Join-Path $env:FRONTEND_IIS_PATH "assets\environment.prod.js"
           if (Test-Path $envFile) {
               (Get-Content $envFile) -replace 'apiUrl\s*:\s*["\'].*["\']', "apiUrl: '$env:BACKEND_URL'" | Set-Content $envFile
@@ -55,7 +56,7 @@ jobs:
 "@ | Out-File -FilePath $webConfigPath -Encoding UTF8
           Write-Host "[INFO] Frontend deployed."
 
-      # 2️⃣ Deploy Backend
+      # 3️⃣ Deploy backend
       - name: Deploy Backend to IIS
         shell: powershell
         run: |
@@ -64,7 +65,7 @@ jobs:
           Remove-Item -Path "$env:BACKEND_IIS_PATH\*" -Recurse -Force -ErrorAction SilentlyContinue
           Copy-Item -Path "$env:BACKEND_SOURCE\*" -Destination $env:BACKEND_IIS_PATH -Recurse
 
-          # Create iisnode web.config
+          # Create iisnode web.config for backend
           $backendWebConfig = Join-Path $env:BACKEND_IIS_PATH "web.config"
           @"
 <configuration>
@@ -86,7 +87,7 @@ jobs:
 "@ | Out-File -FilePath $backendWebConfig -Encoding UTF8
           Write-Host "[INFO] Backend deployed."
 
-      # 3️⃣ Restart IIS
+      # 4️⃣ Restart IIS
       - name: Restart IIS
         shell: powershell
         run: |
