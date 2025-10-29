@@ -1,14 +1,14 @@
-name: Juice Shop IIS Deployment
+name: Juice Shop Deployment Test
 
 on:
-  workflow_dispatch:  # This ensures the workflow shows up for manual trigger
+  workflow_dispatch:  # ensures manual trigger is available
 
 jobs:
   deploy:
     runs-on: self-hosted
 
     steps:
-      # 1️⃣ Initial test message to confirm workflow_dispatch works
+      # 1️⃣ Initial test step to make workflow_dispatch visible
       - name: Print test message
         run: echo "✅ Workflow triggered successfully on $(hostname)"
 
@@ -28,9 +28,9 @@ jobs:
       - name: Deploy Frontend to IIS
         shell: powershell
         run: |
-          Write-Host "=== Juice Shop Frontend Deployment Started ==="
+          Write-Host "=== Frontend Deployment Started ==="
           Import-Module WebAdministration
-
+          
           $site = Get-Website -Name $env:SITE_NAME_FRONTEND -ErrorAction SilentlyContinue
           if ($null -ne $site) { Remove-Website -Name $env:SITE_NAME_FRONTEND }
 
@@ -74,7 +74,7 @@ jobs:
       - name: Deploy Backend to IIS
         shell: powershell
         run: |
-          Write-Host "=== Juice Shop Backend Deployment Started ==="
+          Write-Host "=== Backend Deployment Started ==="
           Import-Module WebAdministration
 
           $site = Get-Website -Name $env:SITE_NAME_BACKEND -ErrorAction SilentlyContinue
