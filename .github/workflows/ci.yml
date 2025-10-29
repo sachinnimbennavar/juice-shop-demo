@@ -1,57 +1,95 @@
-name: Juice Shop Deployment Manual
+name: Juice Shop IIS Full Deployment
 
 on:
-  workflow_dispatch:  # Only manual trigger
+  workflow_dispatch:  # Run manually after unzipping
 
 jobs:
-  deploy-latest-zip:
-    runs-on: self-hosted  # your machine where Nexus is accessible
+  deploy-iis:
+    runs-on: self-hosted  # Your Windows machine with IIS + ARR + iisnode
+
     steps:
-      - name: Juice Shop Deployment
+      - name: Set Paths and URLs
         shell: powershell
-        env:
-          NEXUS_URL: http://127.0.0.1:8081
-          NEXUS_REPO: JuiceShopMavenDemo
-          DEPLOY_PATH: C:\SSDLC\Nexus_Unzips
-          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
-          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
-          Write-Host "[INFO] Starting deployment..."
-          # Clear deployment folder for fresh unzip
-          if (Test-Path $env:DEPLOY_PATH) {
-              Write-Host "[INFO] Clearing existing files from $env:DEPLOY_PATH ..."
-              Remove-Item -Path "$env:DEPLOY_PATH\*" -Recurse -Force
-          } else {
-              New-Item -ItemType Directory -Path $env:DEPLOY_PATH -Force | Out-Null
+          $env:FRONTEND_SOURCE = "C:\SSDLC\Nexus_Unzips\frontend\dist\frontend"
+          $env:FRONTEND_IIS_PATH = "C:\inetpub\wwwroot\JuiceShopFrontend"
+          $env:BACKEND_SOURCE = "C:\SSDLC\Nexus_Unzips\server"
+          $env:BACKEND_IIS_PATH = "C:\inetpub\wwwroot\JuiceShopBackend"
+          $env:BACKEND_URL = "http://localhost/JuiceShopBackend"
+
+      # 1️⃣ Deploy Frontend
+      - name: Deploy Frontend to IIS
+        shell: powershell
+        run: |
+          Write-Host "[INFO] Deploying frontend..."
+          if (-Not (Test-Path $env:FRONTEND_IIS_PATH)) { New-Item -ItemType Directory -Path $env:FRONTEND_IIS_PATH | Out-Null }
+          Remove-Item -Path "$env:FRONTEND_IIS_PATH\*" -Recurse -Force -ErrorAction SilentlyContinue
+          Copy-Item -Path "$env:FRONTEND_SOURCE\*" -Destination $env:FRONTEND_IIS_PATH -Recurse
+          
+          # Update API URL in environment.prod.js
+          $envFile = Join-Path $env:FRONTEND_IIS_PATH "assets\environment.prod.js"
+          if (Test-Path $envFile) {
+              (Get-Content $envFile) -replace 'apiUrl\s*:\s*["\'].*["\']', "apiUrl: '$env:BACKEND_URL'" | Set-Content $envFile
+              Write-Host "[INFO] Frontend API URL updated to $env:BACKEND_URL"
           }
-          # Prepare Basic Auth
-          $base64Auth = [System.Convert]::ToBase64String(
-              [System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}")
-          )
-          $headers = @{ Authorization = "Basic $base64Auth" }
-          # Fetch all full-repo components from Nexus
-          $apiUrl = "${env:NEXUS_URL}/service/rest/v1/search?repository=${env:NEXUS_REPO}&group=com.example.juiceshop&name=full-repo"
-          Write-Host "[INFO] Fetching available versions from $apiUrl ..."
-          $response = Invoke-RestMethod -Uri $apiUrl -Headers $headers -Method Get
-          if ($null -eq $response.items -or $response.items.Count -eq 0) {
-              Write-Host "[ERROR] No full-repo versions found in Nexus!"
-              exit 1
-          }
-          # Find the latest version by timestamp
-          $latest = $response.items | Sort-Object { $_.version } -Descending | Select-Object -First 1
-          $latestVersion = $latest.version
-          $zipDownloadUrl = $latest.assets[0].downloadUrl
-          Write-Host "[INFO] Latest version: $latestVersion"
-          Write-Host "[INFO] Download URL: $zipDownloadUrl"
-          # Download ZIP
-          $zipFilePath = Join-Path $env:DEPLOY_PATH "full-repo-$latestVersion.zip"
-          Write-Host "[INFO] Downloading full repo ZIP to $zipFilePath ..."
-          Invoke-WebRequest -Uri $zipDownloadUrl -OutFile $zipFilePath -Headers $headers
-          if (-Not (Test-Path $zipFilePath)) {
-              Write-Host "[ERROR] Failed to download ZIP!"
-              exit 1
-          }
-          # Unzip
-          Write-Host "[INFO] Extracting ZIP to $env:DEPLOY_PATH ..."
-          Expand-Archive -Path $zipFilePath -DestinationPath $env:DEPLOY_PATH -Force
-          Write-Host "✅ Deployment completed successfully! Latest full-repo version: $latestVersion"
+
+          # Create Angular web.config for routing
+          $webConfigPath = Join-Path $env:FRONTEND_IIS_PATH "web.config"
+          @"
+<configuration>
+  <system.webServer>
+    <rewrite>
+      <rules>
+        <rule name='Angular Routes' stopProcessing='true'>
+          <match url='.*' />
+          <conditions logicalGrouping='MatchAll'>
+            <add input='{REQUEST_FILENAME}' matchType='IsFile' negate='true' />
+            <add input='{REQUEST_FILENAME}' matchType='IsDirectory' negate='true' />
+          </conditions>
+          <action type='Rewrite' url='/index.html' />
+        </rule>
+      </rules>
+    </rewrite>
+  </system.webServer>
+</configuration>
+"@ | Out-File -FilePath $webConfigPath -Encoding UTF8
+          Write-Host "[INFO] Frontend deployed."
+
+      # 2️⃣ Deploy Backend
+      - name: Deploy Backend to IIS
+        shell: powershell
+        run: |
+          Write-Host "[INFO] Deploying backend..."
+          if (-Not (Test-Path $env:BACKEND_IIS_PATH)) { New-Item -ItemType Directory -Path $env:BACKEND_IIS_PATH | Out-Null }
+          Remove-Item -Path "$env:BACKEND_IIS_PATH\*" -Recurse -Force -ErrorAction SilentlyContinue
+          Copy-Item -Path "$env:BACKEND_SOURCE\*" -Destination $env:BACKEND_IIS_PATH -Recurse
+
+          # Create iisnode web.config
+          $backendWebConfig = Join-Path $env:BACKEND_IIS_PATH "web.config"
+          @"
+<configuration>
+  <system.webServer>
+    <handlers>
+      <add name='iisnode' path='server.js' verb='*' modules='iisnode'/>
+    </handlers>
+    <rewrite>
+      <rules>
+        <rule name='Nodejs' stopProcessing='true'>
+          <match url='.*' />
+          <action type='Rewrite' url='server.js'/>
+        </rule>
+      </rules>
+    </rewrite>
+    <iisnode nodeProcessCommandLine='C:\Program Files\nodejs\node.exe' />
+  </system.webServer>
+</configuration>
+"@ | Out-File -FilePath $backendWebConfig -Encoding UTF8
+          Write-Host "[INFO] Backend deployed."
+
+      # 3️⃣ Restart IIS
+      - name: Restart IIS
+        shell: powershell
+        run: |
+          Write-Host "[INFO] Restarting IIS..."
+          iisreset
+          Write-Host "[INFO] IIS restarted. Juice Shop frontend and backend are live!"
