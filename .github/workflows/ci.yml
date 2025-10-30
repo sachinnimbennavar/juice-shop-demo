@@ -1,99 +1,38 @@
-name: Juice Shop Artifact Upload & Deployment Test
+name: Juice Shop IIS Deployment
 
 on:
-  workflow_dispatch:  # Manual trigger
+  workflow_dispatch: # Manual trigger
 
 jobs:
-  artifact-test:
+  deploy-to-iis:
     runs-on: self-hosted
 
     steps:
-      # 1️⃣ Prepare deployment artifact
-      - name: Prepare deployment artifact
-        shell: powershell
-        run: |
-          Write-Host "[INFO] Preparing deployment artifact..."
-          $artifactFolder = "build_output"
-          if (Test-Path $artifactFolder) { Remove-Item -Recurse -Force $artifactFolder }
-          New-Item -ItemType Directory -Path $artifactFolder | Out-Null
-          $filesToInclude = @("build","frontend/dist/frontend","server.js","package.json","web.config")
-          foreach ($item in $filesToInclude) {
-              if (Test-Path $item) {
-                  $dest = Join-Path $artifactFolder $item
-                  $destDir = Split-Path $dest
-                  if (!(Test-Path $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
-                  Copy-Item -Path $item -Destination $dest -Recurse -Force
-              }
-          }
-          Write-Host "[INFO] Deployment-ready artifact prepared at $artifactFolder"
-
-      # 2️⃣ Upload artifact to Nexus (Maven2 repo, verified working)
-      - name: Upload artifact to Nexus
+      # 1️⃣ Deploy to IIS from unzipped folder
+      - name: Deploy artifact to IIS
         shell: powershell
         env:
-          NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
-          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
-          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+          ARTIFACT_PATH: C:\SSDLC\Nexus_Unzips
+          IIS_SITE_PATH: C:\inetpub\wwwroot\JuiceShop
+          IIS_APPPOOL: JuiceShopAppPool
         run: |
-          $version = (Get-Date -Format "yyyyMMddHHmmss")
-          $serverZip = "full-repo-$version.zip"
-          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
-          $headers = @{ Authorization = "Basic $base64Auth" }
+          Write-Host "[INFO] Deploying artifact to IIS..."
           
-          # Create ZIP from deployment artifact
-          if (Test-Path $serverZip) { Remove-Item $serverZip -Force }
-          Compress-Archive -Path "build_output/*" -DestinationPath $serverZip -Force
-
-          # Upload to Maven2 Nexus repo using verified path structure
-          $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/$version/$serverZip"
-          Write-Host "[INFO] Uploading $serverZip to Nexus → $serverUrl"
-          Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $serverZip -Headers $headers -ContentType "application/zip"
-          Write-Host "✅ Artifact uploaded successfully"
-
-      # 3️⃣ Download & unzip latest artifact from Nexus
-      - name: Download & unzip latest artifact from Nexus
-        shell: powershell
-        env:
-          NEXUS_URL: http://127.0.0.1:8081
-          NEXUS_REPO: JuiceShopMavenDemo
-          DEPLOY_PATH: C:\SSDLC\Nexus_Unzips
-          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
-          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
-        run: |
-          Write-Host "[INFO] Starting deployment..."
-          if (Test-Path $env:DEPLOY_PATH) {
-              Write-Host "[INFO] Clearing existing files from $env:DEPLOY_PATH ..."
-              Remove-Item -Path "$env:DEPLOY_PATH\*" -Recurse -Force
+          # Clear existing IIS site folder
+          if (Test-Path $env:IIS_SITE_PATH) {
+              Write-Host "[INFO] Clearing existing files from $env:IIS_SITE_PATH ..."
+              Remove-Item -Path "$env:IIS_SITE_PATH\*" -Recurse -Force
           } else {
-              New-Item -ItemType Directory -Path $env:DEPLOY_PATH -Force | Out-Null
+              New-Item -ItemType Directory -Path $env:IIS_SITE_PATH -Force | Out-Null
           }
 
-          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
-          $headers = @{ Authorization = "Basic $base64Auth" }
+          # Copy all files from unzipped artifact
+          Write-Host "[INFO] Copying files from $env:ARTIFACT_PATH to $env:IIS_SITE_PATH ..."
+          Copy-Item -Path "$env:ARTIFACT_PATH\*" -Destination $env:IIS_SITE_PATH -Recurse -Force
 
-          # Get latest version from Maven2 repo
-          $apiUrl = "${env:NEXUS_URL}/service/rest/v1/search?repository=${env:NEXUS_REPO}&group=com.example.juiceshop&name=full-repo"
-          Write-Host "[INFO] Fetching available versions from $apiUrl ..."
-          $response = Invoke-RestMethod -Uri $apiUrl -Headers $headers -Method Get
-          if ($null -eq $response.items -or $response.items.Count -eq 0) {
-              Write-Host "[ERROR] No full-repo versions found in Nexus!"
-              exit 1
-          }
+          # Restart IIS App Pool
+          Write-Host "[INFO] Restarting IIS App Pool: $env:IIS_APPPOOL ..."
+          Import-Module WebAdministration
+          Restart-WebAppPool -Name $env:IIS_APPPOOL
 
-          $latest = $response.items | Sort-Object { $_.version } -Descending | Select-Object -First 1
-          $latestVersion = $latest.version
-          $zipDownloadUrl = $latest.assets[0].downloadUrl
-          Write-Host "[INFO] Latest version: $latestVersion"
-          Write-Host "[INFO] Download URL: $zipDownloadUrl"
-
-          $zipFilePath = Join-Path $env:DEPLOY_PATH "full-repo-$latestVersion.zip"
-          Write-Host "[INFO] Downloading full repo ZIP to $zipFilePath ..."
-          Invoke-WebRequest -Uri $zipDownloadUrl -OutFile $zipFilePath -Headers $headers
-          if (-Not (Test-Path $zipFilePath)) {
-              Write-Host "[ERROR] Failed to download ZIP!"
-              exit 1
-          }
-
-          Write-Host "[INFO] Extracting ZIP to $env:DEPLOY_PATH ..."
-          Expand-Archive -Path $zipFilePath -DestinationPath $env:DEPLOY_PATH -Force
-          Write-Host "✅ Deployment completed successfully! Latest full-repo version: $latestVersion"
+          Write-Host "✅ Deployment to IIS completed successfully!"
