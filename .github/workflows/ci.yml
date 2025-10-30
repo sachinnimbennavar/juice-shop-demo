@@ -47,8 +47,8 @@ jobs:
           # Restart App Pool
           Restart-WebAppPool -Name $iisAppPool
 
-      # 2️⃣ Deploy Backend Node.js service via NSSM
-      - name: Deploy Backend Node.js Service
+      # 2️⃣ Deploy Backend Node.js Service
+      - name: Deploy Backend Node.js Service via NSSM
         shell: powershell
         run: |
           $serviceName = "JuiceShopServer"
