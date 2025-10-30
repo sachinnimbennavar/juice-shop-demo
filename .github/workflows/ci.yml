@@ -1,53 +1,69 @@
-name: Juice Shop IIS Deployment
+name: Juice Shop Deployment (Frontend IIS + Backend Node.js)
 
 on:
-  workflow_dispatch: # Manual trigger
+  workflow_dispatch:
 
 jobs:
-  deploy-to-iis:
+  deploy:
     runs-on: self-hosted
 
+    env:
+      DEPLOY_PATH: C:\SSDLC\Nexus_Unzips
+      IIS_SITE: JuiceShop
+      IIS_APPPOOL: JuiceShopAppPool
+      NODE_PATH: "C:\Program Files\nodejs\node.exe"
+      NSSM_PATH: "C:\SSDLC\nssm-2.24\nssm-2.24\win64\nssm.exe"
+
     steps:
-      - name: Deploy artifact to IIS
+      # 1️⃣ Deploy Frontend to IIS
+      - name: Deploy Frontend to IIS
         shell: powershell
-        env:
-          ARTIFACT_PATH: C:\SSDLC\Nexus_Unzips
-          IIS_SITE_PATH: C:\inetpub\wwwroot\JuiceShop
-          IIS_APPPOOL: JuiceShopAppPool
         run: |
           Import-Module WebAdministration
+          $iisSite = $env:IIS_SITE
+          $iisAppPool = $env:IIS_APPPOOL
+          $src = $env:DEPLOY_PATH
+          $dest = "C:\inetpub\wwwroot\$iisSite"
 
-          Write-Host "[INFO] Deploying artifact to IIS..."
+          # Clear existing files
+          if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
+          New-Item -ItemType Directory -Path $dest -Force | Out-Null
 
-          # Clear existing IIS site folder
-          if (Test-Path $env:IIS_SITE_PATH) {
-              Write-Host "[INFO] Clearing existing files from $env:IIS_SITE_PATH ..."
-              Remove-Item -Path "$env:IIS_SITE_PATH\*" -Recurse -Force
+          # Copy files
+          Copy-Item -Path "$src\*" -Destination $dest -Recurse -Force
+
+          # Create App Pool if missing
+          if (-not (Test-Path "IIS:\AppPools\$iisAppPool")) {
+              New-WebAppPool -Name $iisAppPool
+          }
+
+          # Assign App Pool to site
+          if (-not (Get-Item "IIS:\Sites\$iisSite" -ErrorAction SilentlyContinue)) {
+              New-Website -Name $iisSite -Port 80 -PhysicalPath $dest -ApplicationPool $iisAppPool
           } else {
-              New-Item -ItemType Directory -Path $env:IIS_SITE_PATH -Force | Out-Null
+              Set-ItemProperty "IIS:\Sites\$iisSite" -Name applicationPool -Value $iisAppPool
           }
 
-          # Copy all files from unzipped artifact
-          Write-Host "[INFO] Copying files from $env:ARTIFACT_PATH to $env:IIS_SITE_PATH ..."
-          Copy-Item -Path "$env:ARTIFACT_PATH\*" -Destination $env:IIS_SITE_PATH -Recurse -Force
+          # Restart App Pool
+          Restart-WebAppPool -Name $iisAppPool
 
-          # Create App Pool if it does not exist
-          if (-not (Test-Path "IIS:\AppPools\$env:IIS_APPPOOL")) {
-              Write-Host "[INFO] Creating App Pool: $env:IIS_APPPOOL ..."
-              New-WebAppPool -Name $env:IIS_APPPOOL
+      # 2️⃣ Deploy Backend Node.js service via NSSM
+      - name: Deploy Backend Node.js Service
+        shell: powershell
+        run: |
+          $serviceName = "JuiceShopServer"
+          $nodeExe = $env:NODE_PATH
+          $serverJs = Join-Path $env:DEPLOY_PATH "server.js"
+          $nssmExe = $env:NSSM_PATH
+
+          # Install service if missing
+          if (-not (Get-Service -Name $serviceName -ErrorAction SilentlyContinue)) {
+              & $nssmExe install $serviceName $nodeExe $serverJs
           }
 
-          # Create IIS site if it does not exist, else assign App Pool
-          if (-not (Test-Path "IIS:\Sites\JuiceShop")) {
-              Write-Host "[INFO] Creating IIS site: JuiceShop ..."
-              New-Website -Name "JuiceShop" -Port 8080 -PhysicalPath $env:IIS_SITE_PATH -ApplicationPool $env:IIS_APPPOOL
+          # Start/restart service
+          if ((Get-Service $serviceName).Status -eq "Running") {
+              Restart-Service $serviceName -Force
           } else {
-              Write-Host "[INFO] Assigning App Pool to existing IIS site ..."
-              Set-ItemProperty "IIS:\Sites\JuiceShop" -Name applicationPool -Value $env:IIS_APPPOOL
+              Start-Service $serviceName
           }
-
-          # Restart IIS App Pool
-          Write-Host "[INFO] Restarting IIS App Pool: $env:IIS_APPPOOL ..."
-          Restart-WebAppPool -Name $env:IIS_APPPOOL
-
-          Write-Host "✅ Deployment to IIS completed successfully!"
