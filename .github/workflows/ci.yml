@@ -14,37 +14,10 @@ jobs:
       NODE_EXE: "C:\\Program Files\\nodejs\\node.exe"
       NSSM_EXE: "C:\\SSDLC\\nssm-2.24\\nssm-2.24\\win64\\nssm.exe"
       ARTIFACT_DIR: "C:\\SSDLC\\ci-artifacts"
-      ARTIFACT_NAME: "full-repo.zip"
-      SEVEN_ZIP_EXE: "C:\\Program Files\\7-Zip\\7z.exe"  # Path to 7z.exe
+      MAVEN_EXE: "C:\\Program Files\\Apache\\Maven\\bin\\mvn.cmd" # Update if different
 
     steps:
-      # 1️⃣ Prepare deployment artifact using 7-Zip
-      - name: Prepare deployment artifact
-        shell: powershell
-        run: |
-          Write-Host "[INFO] Preparing deployment artifact with 7-Zip..."
-          if (Test-Path $env:ARTIFACT_DIR) { Remove-Item -Recurse -Force $env:ARTIFACT_DIR }
-          New-Item -ItemType Directory -Path $env:ARTIFACT_DIR | Out-Null
-
-          $version = (Get-Date -Format "yyyyMMddHHmmss")
-          $artifactZip = Join-Path $env:ARTIFACT_DIR "full-repo-$version.zip"
-
-          # Only include paths that exist
-          $pathsToZip = @()
-          if (Test-Path "frontend\dist\frontend") { $pathsToZip += "frontend\dist\frontend" }
-          if (Test-Path "build") { $pathsToZip += "build" }
-          if (Test-Path "node_modules") { $pathsToZip += "node_modules" }
-          if (Test-Path "package.json") { $pathsToZip += "package.json" }
-          if (Test-Path "web.config") { $pathsToZip += "web.config" }
-
-          if ($pathsToZip.Count -eq 0) {
-              Write-Host "⚠️ No files found to package. Skipping artifact creation."
-          } else {
-              & "$env:SEVEN_ZIP_EXE" a -tzip $artifactZip @pathsToZip -mx=9
-              Write-Host "✅ Artifact packaged at: $artifactZip"
-          }
-
-      # 2️⃣ Upload artifact to Nexus Maven repository
+      # 1️⃣ Upload artifact to Nexus (Maven)
       - name: Upload artifact to Nexus (Maven)
         shell: powershell
         env:
@@ -57,7 +30,7 @@ jobs:
 
           Write-Host "[INFO] Uploading $artifactZip to Nexus Maven repository..."
 
-          & mvn deploy:deploy-file `
+          & $env:MAVEN_EXE deploy:deploy-file `
               -DgroupId=com.example.juiceshop `
               -DartifactId=full-repo `
               -Dversion=$version `
@@ -69,6 +42,28 @@ jobs:
               -Dpassword=$env:NEXUS_PASSWORD
 
           Write-Host "✅ Artifact uploaded successfully to Maven repo."
+
+      # 2️⃣ Download & extract artifact for deployment
+      - name: Juice Shop Deployment
+        shell: powershell
+        run: |
+          Write-Host "[INFO] Starting deployment..."
+          if (Test-Path $env:DEPLOY_PATH) { Remove-Item -Recurse -Force $env:DEPLOY_PATH }
+          New-Item -ItemType Directory -Path $env:DEPLOY_PATH | Out-Null
+
+          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
+          $headers = @{ Authorization = "Basic $base64Auth" }
+
+          $apiUrl = "http://127.0.0.1:8081/service/rest/v1/search?repository=JuiceShopMavenDemo&group=com.example.juiceshop&name=full-repo"
+          $response = Invoke-RestMethod -Uri $apiUrl -Headers $headers -Method Get
+          $latest = $response.items | Sort-Object { $_.version } -Descending | Select-Object -First 1
+          $latestVersion = $latest.version
+          $zipDownloadUrl = $latest.assets[0].downloadUrl
+
+          $zipFilePath = Join-Path $env:DEPLOY_PATH "full-repo-$latestVersion.zip"
+          Invoke-WebRequest -Uri $zipDownloadUrl -OutFile $zipFilePath -Headers $headers
+          Expand-Archive -Path $zipFilePath -DestinationPath $env:DEPLOY_PATH -Force
+          Write-Host "✅ Artifact extracted to $env:DEPLOY_PATH"
 
       # 3️⃣ Deploy frontend to IIS
       - name: Deploy Frontend to IIS
