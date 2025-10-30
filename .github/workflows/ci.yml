@@ -1,10 +1,10 @@
-name: Juice Shop Deployment (Frontend IIS + Backend Node.js)
+name: Juice Shop Manual Deployment (Frontend IIS + Backend Node.js)
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # Manual trigger
 
 jobs:
-  deploy:
+  deploy-only:
     runs-on: self-hosted
 
     env:
@@ -15,27 +15,25 @@ jobs:
       NSSM_PATH: "C:\SSDLC\nssm-2.24\nssm-2.24\win64\nssm.exe"
 
     steps:
-      # 1️⃣ Deploy Frontend via IIS
+      # 1️⃣ Deploy Frontend to IIS
       - name: Deploy Frontend to IIS
         shell: powershell
         run: |
           Import-Module WebAdministration
-          $iisSite = $env:IIS_SITE
-          $iisAppPool = $env:IIS_APPPOOL
+          Write-Host "[INFO] Deploying frontend to IIS..."
           $src = $env:DEPLOY_PATH
-          $dest = "C:\inetpub\wwwroot\$iisSite"
+          $dest = "C:\inetpub\wwwroot\$env:IIS_SITE"
 
           if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
           New-Item -ItemType Directory -Path $dest -Force | Out-Null
-          Copy-Item -Path "$src\*" -Destination $dest -Recurse -Force
+          Copy-Item -Path "$src\frontend\dist\frontend\*" -Destination $dest -Recurse -Force
 
-          if (-not (Test-Path "IIS:\AppPools\$iisAppPool")) { New-WebAppPool -Name $iisAppPool }
-          if (-not (Get-Item "IIS:\Sites\$iisSite" -ErrorAction SilentlyContinue)) {
-              New-Website -Name $iisSite -Port 80 -PhysicalPath $dest -ApplicationPool $iisAppPool
-          } else {
-              Set-ItemProperty "IIS:\Sites\$iisSite" -Name applicationPool -Value $iisAppPool
+          if (-not (Test-Path "IIS:\AppPools\$env:IIS_APPPOOL")) {
+              Write-Host "[INFO] Creating App Pool: $env:IIS_APPPOOL ..."
+              New-WebAppPool -Name $env:IIS_APPPOOL | Out-Null
           }
-          Restart-WebAppPool -Name $iisAppPool
+          Set-ItemProperty "IIS:\Sites\Default Web Site" -Name applicationPool -Value $env:IIS_APPPOOL
+          Restart-WebAppPool -Name $env:IIS_APPPOOL
           Write-Host "✅ Frontend deployed to IIS"
 
       # 2️⃣ Deploy Backend Node.js via NSSM
@@ -48,6 +46,7 @@ jobs:
           $nssmExe = $env:NSSM_PATH
 
           if (-not (Get-Service -Name $serviceName -ErrorAction SilentlyContinue)) {
+              Write-Host "[INFO] Installing Node.js backend service via NSSM..."
               & $nssmExe install $serviceName $nodeExe $serverJs
           }
 
