@@ -67,13 +67,6 @@ jobs:
       - name: Build server
         run: npm run build:server
 
-      # 9️⃣ Optional SonarQube analysis (safe skip if not installed)
-      - name: SonarQube Analysis (Optional)
-        if: always()
-        run: |
-          Write-Host "Skipping SonarQube analysis since it's optional."
-        shell: pwsh
-
       # 🔟 Nexus Upload Phase
       - name: 📦 Create & Upload Full Repo ZIP to Nexus
         shell: powershell
