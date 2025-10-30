@@ -1,110 +1,170 @@
-name: Juice Shop IIS Deployment Optimized
+name: Juice Shop CI/CD Full Pipeline
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:  # Manual trigger
 
 jobs:
-  deploy:
+  build-and-deploy:
     runs-on: self-hosted
 
     steps:
-      - name: Checkout repository (optimized)
+      # 1️⃣ Checkout repository (shallow fetch for speed)
+      - name: Checkout repository
         uses: actions/checkout@v3
         with:
-          fetch-depth: 1          # shallow clone
-          persist-credentials: false
+          fetch-depth: 1
 
-      - name: Create missing provider-metadata.json to avoid ENOENT error
-        shell: powershell
-        run: |
-          $path = ".\.well-known\csaf"
-          if (-not (Test-Path $path)) {
-            New-Item -ItemType Directory -Force -Path $path
-          }
-          $file = "$path\provider-metadata.json"
-          if (-not (Test-Path $file)) {
-            '{}' | Out-File -Encoding utf8 $file
-          }
-
-      - name: Verify frontend build exists
-        shell: powershell
-        run: |
-          $frontendBuildPath = "frontend\dist\juice-shop-frontend"
-          if (-not (Test-Path $frontendBuildPath)) {
-            Write-Error "Frontend build folder not found: $frontendBuildPath"
-            exit 1
-          }
-
-      - name: Verify server build exists
-        shell: powershell
-        run: |
-          $serverBuildPath = "server"
-          if (-not (Test-Path $serverBuildPath)) {
-            Write-Error "Server build folder not found: $serverBuildPath"
-            exit 1
-          }
-
-      - name: Juice Shop IIS Deployment
+      # 2️⃣ Nexus Upload Phase (replaced with verified working code)
+      - name: 📦 Create & Upload Full Repo ZIP to Nexus
         shell: powershell
         env:
-          DEPLOY_PATH: C:\DeleteafterTest\veryLatest\full-repo-20251025220209
-          IIS_SITE_NAME: JuiceShopDemo
-          IIS_ROOT: C:\inetpub\wwwroot
-          FRONTEND_SOURCE: C:\DeleteafterTest\veryLatest\full-repo-20251025220209\frontend\dist\juice-shop-frontend
-          SERVER_SOURCE: C:\DeleteafterTest\veryLatest\full-repo-20251025220209\server
+          NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
-          Write-Host "=== Juice Shop IIS Deployment Started ==="
-
-          Import-Module WebAdministration
-
-          # Stop existing IIS site if it exists
-          $site = Get-Website -Name $env:IIS_SITE_NAME -ErrorAction SilentlyContinue
-          if ($null -ne $site) {
-              Write-Host "[INFO] Stopping existing IIS site $($env:IIS_SITE_NAME)..."
-              Stop-Website -Name $env:IIS_SITE_NAME
-          }
-
-          # Create IIS root folder if missing
-          $iisPath = Join-Path $env:IIS_ROOT $env:IIS_SITE_NAME
-          if (-Not (Test-Path $iisPath)) {
-              Write-Host "[INFO] Creating IIS directory $iisPath..."
-              New-Item -ItemType Directory -Path $iisPath -Force | Out-Null
-          }
-
-          # Clear IIS folder
-          Write-Host "[INFO] Clearing existing files from $iisPath..."
-          Get-ChildItem $iisPath -Recurse -Force | Remove-Item -Force -Recurse
-
-          # Copy frontend
-          if (Test-Path $env:FRONTEND_SOURCE) {
-              Write-Host "[INFO] Copying frontend from $($env:FRONTEND_SOURCE) to $iisPath..."
-              Copy-Item -Path (Join-Path $env:FRONTEND_SOURCE '*') -Destination $iisPath -Recurse -Force
-          } else {
-              Write-Error "Frontend build folder not found: $($env:FRONTEND_SOURCE)"
-              exit 1
-          }
-
-          # Copy server
-          if (Test-Path $env:SERVER_SOURCE) {
-              Write-Host "[INFO] Copying server from $($env:SERVER_SOURCE) to $iisPath..."
-              Copy-Item -Path (Join-Path $env:SERVER_SOURCE '*') -Destination $iisPath -Recurse -Force
-          } else {
-              Write-Error "Server build folder not found: $($env:SERVER_SOURCE)"
-              exit 1
-          }
-
-          # Start IIS site or create if missing, only start if stopped
-          $site = Get-Website -Name $env:IIS_SITE_NAME -ErrorAction SilentlyContinue
-          if ($null -ne $site) {
-              if ($site.State -ne 'Started') {
-                  Write-Host "[INFO] Starting IIS site $($env:IIS_SITE_NAME)..."
-                  Start-Website -Name $env:IIS_SITE_NAME
+          $version = (Get-Date -Format "yyyyMMddHHmmss")
+          $serverZip = "full-repo-$version.zip"
+          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
+          $headers = @{ Authorization = "Basic $base64Auth" }
+          $itemsInOrder = @(
+              ".dependabot",".github",".gitlab",".well-known",".zap",
+              "build","logs","node_modules","config","data","encryptionkeys",
+              "frontend","ftp","i18n","lib","models","monitoring",
+              "routes","rsn","screenshots","test","uploads","vagrant","views",
+              ".codeclimate.yml",".devcontainer.json",".dockerignore",".eslintrc.js",
+              ".gitignore",".gitlab-ci.yml",".gitpod.yml",".mailmap",".npmrc",
+              "app.json","app.ts","CODE_OF_CONDUCT.md","config.schema.yml","CONTRIBUTING.md",
+              "crowdin.yaml","ctf.key","cypress.config.ts","docker-compose.test.yml","Dockerfile",
+              "Gruntfile.js","HALL_OF_FAME.md","LICENSE","package.json","README.md",
+              "REFERENCES.md","SECURITY.md","server.ts","SOLUTIONS.md","swagger.yml",
+              "threat-model.json","tsconfig.json"
+          )
+          if (Test-Path $serverZip) { Remove-Item $serverZip -Force }
+          foreach ($item in $itemsInOrder) {
+              if (Test-Path $item) {
+                  if ($item -eq "node_modules") {
+                      $count = (Get-ChildItem node_modules -Recurse | Measure-Object).Count
+                      if ($count -gt 5000) {
+                          Write-Host "⚠️ Skipping node_modules folder to save time (contains $count items)..."
+                          continue
+                      }
+                  }
+                  Write-Host "Adding $item to ZIP..."
+                  Compress-Archive -Path $item -DestinationPath $serverZip -Update
               } else {
-                  Write-Host "[INFO] IIS site $($env:IIS_SITE_NAME) already started."
+                  if ($item -in @("build","logs","node_modules")) {
+                      Write-Host "Creating empty folder $item..."
+                      New-Item -ItemType Directory -Path $item
+                      Compress-Archive -Path $item -DestinationPath $serverZip -Update
+                  }
               }
-          } else {
-              Write-Host "[INFO] Creating new IIS site $($env:IIS_SITE_NAME) on port 8080..."
-              New-Website -Name $env:IIS_SITE_NAME -Port 8080 -PhysicalPath $iisPath -Force | Out-Null
           }
+          $size = (Get-Item $serverZip).Length
+          Write-Host "[INFO] ZIP file size: $size bytes"
+          if ($size -lt 100000) {
+              Write-Error "ZIP file size too small. Likely incomplete!"
+              exit 1
+          }
+          Write-Host "✅ Full repo ZIP created: $serverZip"
+          $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/$version/$serverZip"
+          Write-Host "⬆️ Uploading to Nexus → $serverUrl"
+          Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $serverZip -Headers $headers -ContentType "application/zip"
+          Write-Host "✅ Full repo uploaded successfully."
+      # 3️⃣ Set Node memory for server build
+      - name: Set Node memory
+        run: set NODE_OPTIONS=--max_old_space_size=4096
 
-          Write-Host "=== Deployment Completed Successfully ==="
+      # 4️⃣ Cache frontend dependencies and Angular build output
+      - name: Cache frontend
+        uses: actions/cache@v3
+        with:
+          path: |
+            frontend/node_modules
+            frontend/dist
+            frontend/.angular
+          key: ${{ runner.os }}-frontend-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-frontend-
+      # 5️⃣ Cache server dependencies
+      - name: Cache server
+        uses: actions/cache@v3
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-server-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-server-
+      # 6️⃣ Install frontend dependencies
+      - name: Install frontend dependencies
+        run: |
+          cd frontend
+          npm install --legacy-peer-deps --prefer-offline --no-audit
+          cd ..
+      # 7️⃣ Build frontend
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm run build -- --configuration production --watch=false --verbose
+          cd ..
+      # 8️⃣ Install server dependencies
+      - name: Install server dependencies
+        run: npm install --prefer-offline --no-audit
+
+      # 9️⃣ Build server
+      - name: Build server
+        run: npm run build:server
+
+      # 11️⃣ Juice Shop Deployment (download & unzip latest Nexus ZIP)
+      - name: Juice Shop Deployment
+        shell: powershell
+        env:
+          NEXUS_URL: http://127.0.0.1:8081
+          NEXUS_REPO: JuiceShopMavenDemo
+          DEPLOY_PATH: C:\SSDLC\Nexus_Unzips
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+        run: |
+          Write-Host "[INFO] Starting deployment..."
+          # Clear deployment folder for fresh unzip
+          if (Test-Path $env:DEPLOY_PATH) {
+              Write-Host "[INFO] Clearing existing files from $env:DEPLOY_PATH ..."
+              Remove-Item -Path "$env:DEPLOY_PATH\*" -Recurse -Force
+          } else {
+              New-Item -ItemType Directory -Path $env:DEPLOY_PATH -Force | Out-Null
+          }
+          # Prepare Basic Auth
+          $base64Auth = [System.Convert]::ToBase64String(
+              [System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}")
+          )
+          $headers = @{ Authorization = "Basic $base64Auth" }
+          # Fetch all full-repo components from Nexus
+          $apiUrl = "${env:NEXUS_URL}/service/rest/v1/search?repository=${env:NEXUS_REPO}&group=com.example.juiceshop&name=full-repo"
+          Write-Host "[INFO] Fetching available versions from $apiUrl ..."
+          $response = Invoke-RestMethod -Uri $apiUrl -Headers $headers -Method Get
+          if ($null -eq $response.items -or $response.items.Count -eq 0) {
+              Write-Host "[ERROR] No full-repo versions found in Nexus!"
+              exit 1
+          }
+          # Find the latest version by timestamp
+          $latest = $response.items | Sort-Object { $_.version } -Descending | Select-Object -First 1
+          $latestVersion = $latest.version
+          $zipDownloadUrl = $latest.assets[0].downloadUrl
+          Write-Host "[INFO] Latest version: $latestVersion"
+          Write-Host "[INFO] Download URL: $zipDownloadUrl"
+          # Download ZIP
+          $zipFilePath = Join-Path $env:DEPLOY_PATH "full-repo-$latestVersion.zip"
+          Write-Host "[INFO] Downloading full repo ZIP to $zipFilePath ..."
+          Invoke-WebRequest -Uri $zipDownloadUrl -OutFile $zipFilePath -Headers $headers
+          if (-Not (Test-Path $zipFilePath)) {
+              Write-Host "[ERROR] Failed to download ZIP!"
+              exit 1
+          }
+          # Unzip
+          Write-Host "[INFO] Extracting ZIP to $env:DEPLOY_PATH ..."
+          Expand-Archive -Path $zipFilePath -DestinationPath $env:DEPLOY_PATH -Force
+          Write-Host "✅ Deployment completed successfully! Latest full-repo version: $latestVersion"
