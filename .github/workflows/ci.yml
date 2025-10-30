@@ -14,17 +14,17 @@ jobs:
     runs-on: self-hosted
 
     steps:
-      # 1️⃣ Checkout the repository
+      # 1️⃣ Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v3
         with:
           fetch-depth: 1
 
-      # 2️⃣ Set Node memory for server build
+      # 2️⃣ Set Node memory
       - name: Set Node memory
         run: set NODE_OPTIONS=--max_old_space_size=4096
 
-      # 3️⃣ Cache frontend dependencies and Angular build output
+      # 3️⃣ Cache frontend dependencies
       - name: Cache frontend
         uses: actions/cache@v3
         with:
@@ -52,7 +52,7 @@ jobs:
           npm install --legacy-peer-deps --prefer-offline --no-audit
           cd ..
 
-      # 6️⃣ Build frontend (Angular incremental build handled automatically)
+      # 6️⃣ Build frontend (production)
       - name: Build frontend
         run: |
           cd frontend
@@ -67,8 +67,38 @@ jobs:
       - name: Build server
         run: npm run build:server
 
-      # 🔟 Nexus Upload Phase
-      - name: 📦 Create & Upload Full Repo ZIP to Nexus
+      # 9️⃣ Prepare deployment artifact (ready for IIS)
+      - name: Prepare deployment artifact
+        shell: powershell
+        run: |
+          Write-Host "📦 Preparing deployment artifact..."
+          $artifactFolder = "build_output"
+          if (Test-Path $artifactFolder) { Remove-Item -Recurse -Force $artifactFolder }
+          New-Item -ItemType Directory -Path $artifactFolder | Out-Null
+
+          $filesToInclude = @(
+            "build",                        # Backend build output
+            "frontend/dist/frontend",        # Frontend production build
+            "server.js",                     # Node entrypoint
+            "package.json",                  # Server dependencies
+            "web.config"                     # IIS configuration
+          )
+
+          foreach ($item in $filesToInclude) {
+              if (Test-Path $item) {
+                  $dest = Join-Path $artifactFolder $item
+                  $destDir = Split-Path $dest
+                  if (!(Test-Path $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
+                  Copy-Item -Path $item -Destination $dest -Recurse -Force
+                  Write-Host "✅ Added: $item"
+              } else {
+                  Write-Warning "⚠️ Missing item (skipped): $item"
+              }
+          }
+          Write-Host "✅ Deployment-ready artifact prepared at $artifactFolder"
+
+      # 🔟 Upload artifact to Nexus
+      - name: Upload artifact to Nexus
         shell: powershell
         env:
           NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
@@ -76,94 +106,66 @@ jobs:
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
           $version = (Get-Date -Format "yyyyMMddHHmmss")
-          $serverZip = "full-repo-$version.zip"
+          $zipName = "juiceshop-build-$version.zip"
+          Compress-Archive -Path "build_output/*" -DestinationPath $zipName -Force
+
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
-          $itemsInOrder = @(
-              ".dependabot",".github",".gitlab",".well-known",".zap",
-              "build","logs","node_modules","config","data","encryptionkeys",
-              "frontend","ftp","i18n","lib","models","monitoring",
-              "routes","rsn","screenshots","test","uploads","vagrant","views",
-              ".codeclimate.yml",".devcontainer.json",".dockerignore",".eslintrc.js",
-              ".gitignore",".gitlab-ci.yml",".gitpod.yml",".mailmap",".npmrc",
-              "app.json","app.ts","CODE_OF_CONDUCT.md","config.schema.yml","CONTRIBUTING.md",
-              "crowdin.yaml","ctf.key","cypress.config.ts","docker-compose.test.yml","Dockerfile",
-              "Gruntfile.js","HALL_OF_FAME.md","LICENSE","package.json","README.md",
-              "REFERENCES.md","SECURITY.md","server.ts","SOLUTIONS.md","swagger.yml",
-              "threat-model.json","tsconfig.json"
-          )
-          if (Test-Path $serverZip) { Remove-Item $serverZip -Force }
-          foreach ($item in $itemsInOrder) {
-              if (Test-Path $item) {
-                  if ($item -eq "node_modules") {
-                      $count = (Get-ChildItem node_modules -Recurse | Measure-Object).Count
-                      if ($count -gt 5000) {
-                          Write-Host "⚠️ Skipping node_modules folder to save time (contains $count items)..."
-                          continue
-                      }
-                  }
-                  Write-Host "Adding $item to ZIP..."
-                  Compress-Archive -Path $item -DestinationPath $serverZip -Update
-              } else {
-                  if ($item -in @("build","logs","node_modules")) {
-                      Write-Host "Creating empty folder $item..."
-                      New-Item -ItemType Directory -Path $item
-                      Compress-Archive -Path $item -DestinationPath $serverZip -Update
-                  }
-              }
-          }
-          $size = (Get-Item $serverZip).Length
-          Write-Host "[INFO] ZIP file size: $size bytes"
-          if ($size -lt 100000) {
-              Write-Error "ZIP file size too small. Likely incomplete!"
-              exit 1
-          }
-          Write-Host "✅ Full repo ZIP created: $serverZip"
-          $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/$version/$serverZip"
-          Write-Host "⬆️ Uploading to Nexus → $serverUrl"
-          Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $serverZip -Headers $headers -ContentType "application/zip"
-          Write-Host "✅ Full repo uploaded successfully."
 
-      # 11️⃣ Juice Shop Deployment (download & unzip latest Nexus ZIP)
-      - name: Juice Shop Deployment
+          $uploadUrl = "${env:NEXUS_URL}/com/example/juiceshop/artifacts/$version/$zipName"
+          Write-Host "⬆️ Uploading artifact to Nexus → $uploadUrl"
+          Invoke-RestMethod -Uri $uploadUrl -Method Put -InFile $zipName -Headers $headers -ContentType "application/zip"
+          Write-Host "✅ Artifact uploaded to Nexus"
+
+      # 11️⃣ Deploy artifact to IIS
+      - name: Deploy latest build to IIS
         shell: powershell
         env:
           NEXUS_URL: http://127.0.0.1:8081
           NEXUS_REPO: JuiceShopMavenDemo
           DEPLOY_PATH: C:\SSDLC\Nexus_Unzips
+          IIS_FRONTEND_PATH: C:\inetpub\wwwroot\JuiceShopFrontend
+          IIS_BACKEND_PATH: C:\inetpub\wwwroot\JuiceShopBackend
+          IIS_APPPOOL: JuiceShopAppPool
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
-          Write-Host "[INFO] Starting deployment..."
-          if (Test-Path $env:DEPLOY_PATH) {
-              Write-Host "[INFO] Clearing existing files from $env:DEPLOY_PATH ..."
-              Remove-Item -Path "$env:DEPLOY_PATH\*" -Recurse -Force
-          } else {
-              New-Item -ItemType Directory -Path $env:DEPLOY_PATH -Force | Out-Null
-          }
-          $base64Auth = [System.Convert]::ToBase64String(
-              [System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}")
-          )
+          Write-Host "[INFO] Starting IIS deployment..."
+          if (Test-Path $env:DEPLOY_PATH) { Remove-Item "$env:DEPLOY_PATH\*" -Recurse -Force } else { New-Item -ItemType Directory -Path $env:DEPLOY_PATH -Force | Out-Null }
+
+          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
-          $apiUrl = "${env:NEXUS_URL}/service/rest/v1/search?repository=${env:NEXUS_REPO}&group=com.example.juiceshop&name=full-repo"
-          Write-Host "[INFO] Fetching available versions from $apiUrl ..."
+
+          $apiUrl = "${env:NEXUS_URL}/service/rest/v1/search?repository=${env:NEXUS_REPO}&group=com.example.juiceshop&name=artifacts"
           $response = Invoke-RestMethod -Uri $apiUrl -Headers $headers -Method Get
-          if ($null -eq $response.items -or $response.items.Count -eq 0) {
-              Write-Host "[ERROR] No full-repo versions found in Nexus!"
-              exit 1
-          }
+          if ($null -eq $response.items -or $response.items.Count -eq 0) { Write-Error "❌ No builds found in Nexus!"; exit 1 }
+
           $latest = $response.items | Sort-Object { $_.version } -Descending | Select-Object -First 1
           $latestVersion = $latest.version
-          $zipDownloadUrl = $latest.assets[0].downloadUrl
-          Write-Host "[INFO] Latest version: $latestVersion"
-          Write-Host "[INFO] Download URL: $zipDownloadUrl"
-          $zipFilePath = Join-Path $env:DEPLOY_PATH "full-repo-$latestVersion.zip"
-          Write-Host "[INFO] Downloading full repo ZIP to $zipFilePath ..."
-          Invoke-WebRequest -Uri $zipDownloadUrl -OutFile $zipFilePath -Headers $headers
-          if (-Not (Test-Path $zipFilePath)) {
-              Write-Host "[ERROR] Failed to download ZIP!"
-              exit 1
-          }
-          Write-Host "[INFO] Extracting ZIP to $env:DEPLOY_PATH ..."
-          Expand-Archive -Path $zipFilePath -DestinationPath $env:DEPLOY_PATH -Force
-          Write-Host "✅ Deployment completed successfully! Latest full-repo version: $latestVersion"
+          $zipUrl = $latest.assets[0].downloadUrl
+          $zipFile = Join-Path $env:DEPLOY_PATH "juiceshop-build-$latestVersion.zip"
+
+          Write-Host "📥 Downloading latest build → $zipFile"
+          Invoke-WebRequest -Uri $zipUrl -OutFile $zipFile -Headers $headers
+
+          Expand-Archive -Path $zipFile -DestinationPath $env:DEPLOY_PATH -Force
+          Write-Host "✅ Extracted build to $env:DEPLOY_PATH"
+
+          # Deploy frontend
+          if (Test-Path $env:IIS_FRONTEND_PATH) { Remove-Item "$env:IIS_FRONTEND_PATH\*" -Recurse -Force }
+          Copy-Item -Path "$env:DEPLOY_PATH\build_output\frontend\dist\frontend\*" -Destination $env:IIS_FRONTEND_PATH -Recurse -Force
+          Write-Host "✅ Frontend deployed to $env:IIS_FRONTEND_PATH"
+
+          # Deploy backend
+          if (Test-Path $env:IIS_BACKEND_PATH) { Remove-Item "$env:IIS_BACKEND_PATH\*" -Recurse -Force }
+          Copy-Item -Path "$env:DEPLOY_PATH\build_output\build\*" -Destination $env:IIS_BACKEND_PATH -Recurse -Force
+          Copy-Item -Path "$env:DEPLOY_PATH\build_output\server.js" -Destination $env:IIS_BACKEND_PATH -Force
+          Copy-Item -Path "$env:DEPLOY_PATH\build_output\package.json" -Destination $env:IIS_BACKEND_PATH -Force
+          Copy-Item -Path "$env:DEPLOY_PATH\build_output\web.config" -Destination $env:IIS_BACKEND_PATH -Force
+          Write-Host "✅ Backend deployed to $env:IIS_BACKEND_PATH"
+
+          # Restart IIS App Pool
+          Import-Module WebAdministration
+          if ((Get-WebAppPoolState -Name $env:IIS_APPPOOL).Value -eq "Started") { Restart-WebAppPool $env:IIS_APPPOOL; Write-Host "🔄 IIS App Pool restarted" } else { Start-WebAppPool $env:IIS_APPPOOL; Write-Host "▶️ IIS App Pool started" }
+
+          Write-Host "✅ Juice Shop fully deployed to IIS!"
