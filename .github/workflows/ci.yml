@@ -1,4 +1,4 @@
-name: Juice Shop Deployment Only
+name: Juice Shop Deployment Only (7-Zip Artifact)
 
 on:
   workflow_dispatch:
@@ -14,9 +14,10 @@ jobs:
       NODE_EXE: "C:\\Program Files\\nodejs\\node.exe"
       NSSM_EXE: "C:\\SSDLC\\nssm-2.24\\nssm-2.24\\win64\\nssm.exe"
       ARTIFACT_DIR: "C:\\SSDLC\\ci-artifacts"
+      SEVENZIP_EXE: "C:\\Program Files\\7-Zip\\7z.exe"
 
     steps:
-      # 1️⃣ Upload artifact to Nexus
+      # 1️⃣ Upload artifact to Nexus using 7-Zip
       - name: Upload artifact to Nexus
         shell: powershell
         env:
@@ -31,7 +32,7 @@ jobs:
 
           if (Test-Path $serverZip) { Remove-Item $serverZip -Force }
 
-          # List of files/folders to compress
+          # Files/folders to include
           $pathsToCompress = @(
               "frontend\dist\frontend",
               "build",
@@ -40,11 +41,17 @@ jobs:
               "web.config"
           )
 
-          # Only keep existing paths (skips missing web.config automatically)
+          # Only include existing paths (skips missing web.config)
           $existingPaths = $pathsToCompress | Where-Object { Test-Path $_ }
 
-          Compress-Archive -Path $existingPaths -DestinationPath $serverZip -Force
+          # Convert paths to 7-Zip string
+          $existingPathsStr = $existingPaths -join " "
 
+          # Package with 7-Zip (fast compression)
+          & "$env:SEVENZIP_EXE" a -tzip "$serverZip" $existingPathsStr -mx=1
+          Write-Host "✅ Artifact packaged at: $serverZip"
+
+          # Upload to Nexus
           $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/$version/$serverZip"
           Write-Host "[INFO] Uploading $serverZip to Nexus → $serverUrl"
           Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $serverZip -Headers $headers -ContentType "application/zip"
