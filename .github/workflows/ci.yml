@@ -15,7 +15,7 @@ jobs:
       NSSM_PATH: "C:\SSDLC\nssm-2.24\nssm-2.24\win64\nssm.exe"
 
     steps:
-      # 1️⃣ Deploy Frontend to IIS
+      # 1️⃣ Deploy Frontend via IIS
       - name: Deploy Frontend to IIS
         shell: powershell
         run: |
@@ -25,29 +25,20 @@ jobs:
           $src = $env:DEPLOY_PATH
           $dest = "C:\inetpub\wwwroot\$iisSite"
 
-          # Clear existing files
           if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
           New-Item -ItemType Directory -Path $dest -Force | Out-Null
-
-          # Copy files
           Copy-Item -Path "$src\*" -Destination $dest -Recurse -Force
 
-          # Create App Pool if missing
-          if (-not (Test-Path "IIS:\AppPools\$iisAppPool")) {
-              New-WebAppPool -Name $iisAppPool
-          }
-
-          # Assign App Pool to site
+          if (-not (Test-Path "IIS:\AppPools\$iisAppPool")) { New-WebAppPool -Name $iisAppPool }
           if (-not (Get-Item "IIS:\Sites\$iisSite" -ErrorAction SilentlyContinue)) {
               New-Website -Name $iisSite -Port 80 -PhysicalPath $dest -ApplicationPool $iisAppPool
           } else {
               Set-ItemProperty "IIS:\Sites\$iisSite" -Name applicationPool -Value $iisAppPool
           }
-
-          # Restart App Pool
           Restart-WebAppPool -Name $iisAppPool
+          Write-Host "✅ Frontend deployed to IIS"
 
-      # 2️⃣ Deploy Backend Node.js Service
+      # 2️⃣ Deploy Backend Node.js via NSSM
       - name: Deploy Backend Node.js Service via NSSM
         shell: powershell
         run: |
@@ -56,14 +47,13 @@ jobs:
           $serverJs = Join-Path $env:DEPLOY_PATH "server.js"
           $nssmExe = $env:NSSM_PATH
 
-          # Install service if missing
           if (-not (Get-Service -Name $serviceName -ErrorAction SilentlyContinue)) {
               & $nssmExe install $serviceName $nodeExe $serverJs
           }
 
-          # Start/restart service
           if ((Get-Service $serviceName).Status -eq "Running") {
               Restart-Service $serviceName -Force
           } else {
               Start-Service $serviceName
           }
+          Write-Host "✅ Backend Node.js service deployed via NSSM"
