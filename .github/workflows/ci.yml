@@ -31,11 +31,15 @@ jobs:
 
           if (Test-Path $serverZip) { Remove-Item $serverZip -Force }
 
-          # Include backend node_modules in addition to build_output
-          Compress-Archive -Path `
-            "build_output/*", `
-            "node_modules" `
-            -DestinationPath $serverZip -Force
+          # Include frontend dist, build, node_modules, package.json, web.config
+          $pathsToCompress = @(
+              "frontend\dist\frontend",
+              "build",
+              "node_modules",
+              "package.json",
+              "web.config"
+          )
+          Compress-Archive -Path $pathsToCompress -DestinationPath $serverZip -Force
 
           $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/$version/$serverZip"
           Write-Host "[INFO] Uploading $serverZip to Nexus → $serverUrl"
