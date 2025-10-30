@@ -11,8 +11,8 @@ jobs:
       DEPLOY_PATH: C:\SSDLC\Nexus_Unzips
       IIS_SITE: JuiceShop
       IIS_APPPOOL: JuiceShopAppPool
-      NODE_PATH: "C:\Program Files\nodejs\node.exe"
-      NSSM_PATH: "C:\SSDLC\nssm-2.24\nssm-2.24\win64\nssm.exe"
+      NODE_PATH: C:\Program Files\nodejs\node.exe
+      NSSM_PATH: C:\SSDLC\nssm-2.24\nssm-2.24\win64\nssm.exe
 
     steps:
       # 1️⃣ Deploy Frontend to IIS
@@ -23,11 +23,9 @@ jobs:
           Write-Host "[INFO] Deploying frontend to IIS..."
           $src = $env:DEPLOY_PATH
           $dest = "C:\inetpub\wwwroot\$env:IIS_SITE"
-
           if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
           New-Item -ItemType Directory -Path $dest -Force | Out-Null
           Copy-Item -Path "$src\frontend\dist\frontend\*" -Destination $dest -Recurse -Force
-
           if (-not (Test-Path "IIS:\AppPools\$env:IIS_APPPOOL")) {
               Write-Host "[INFO] Creating App Pool: $env:IIS_APPPOOL ..."
               New-WebAppPool -Name $env:IIS_APPPOOL | Out-Null
@@ -44,12 +42,10 @@ jobs:
           $nodeExe = $env:NODE_PATH
           $serverJs = Join-Path $env:DEPLOY_PATH "server.js"
           $nssmExe = $env:NSSM_PATH
-
           if (-not (Get-Service -Name $serviceName -ErrorAction SilentlyContinue)) {
               Write-Host "[INFO] Installing Node.js backend service via NSSM..."
               & $nssmExe install $serviceName $nodeExe $serverJs
           }
-
           if ((Get-Service $serviceName).Status -eq "Running") {
               Restart-Service $serviceName -Force
           } else {
