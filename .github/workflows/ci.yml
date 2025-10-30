@@ -1,4 +1,4 @@
-name: Juice Shop Full CI/CD Deployment (Manual Run, Fixed)
+name: Juice Shop Deployment Only
 
 on:
   workflow_dispatch:
@@ -12,88 +12,53 @@ jobs:
       IIS_SITE: "JuiceShop"
       IIS_APPPOOL: "JuiceShopAppPool"
       NODE_EXE: "C:\\Program Files\\nodejs\\node.exe"
-      NSSM_EXE: "C:\\SSDLC\\nssm-2.24\\nssm-2.24\\win64\\nssm.exe"
-      ARTIFACT_DIR: "C:\\SSDLC\\ci-artifacts"
-      SEVENZIP_EXE: "C:\\Program Files\\7-Zip\\7z.exe"
+      NSSM_EXE: "C:\\SSDLC\\nssm-2.24\\win64\\nssm.exe"
+      NEXUS_URL: "http://127.0.0.1:8081"
+      NEXUS_REPO: "JuiceShopMavenDemo"
+      NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+      NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
 
     steps:
-
-      # 1️⃣ Upload artifact to Nexus using 7-Zip (fixed)
-      - name: Upload artifact to Nexus
+      # 1️⃣ Download & unzip latest artifact from Nexus
+      - name: Download & unzip latest artifact from Nexus
         shell: powershell
-        env:
-          NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
-          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
-          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
-          $version = (Get-Date -Format "yyyyMMddHHmmss")
-          $artifactZip = Join-Path $env:ARTIFACT_DIR "full-repo-$version.zip"
-          $sevenZip = $env:SEVENZIP_EXE
+          Write-Host "[INFO] Starting artifact download..."
+          if (Test-Path $env:DEPLOY_PATH) {
+              Remove-Item -Path "$env:DEPLOY_PATH\*" -Recurse -Force
+          } else {
+              New-Item -ItemType Directory -Path $env:DEPLOY_PATH -Force | Out-Null
+          }
+
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
+          $apiUrl = "${env:NEXUS_URL}/service/rest/v1/search?repository=${env:NEXUS_REPO}&group=com.example.juiceshop&name=full-repo"
 
-          if (Test-Path $artifactZip) { Remove-Item $artifactZip -Force }
-
-          # Paths to include
-          $paths = @(
-              "frontend\dist\frontend",
-              "build",
-              "node_modules",
-              "package.json",
-              "web.config"
-          )
-
-          # Resolve full paths and include only existing ones
-          $existingPaths = $paths | ForEach-Object {
-              $full = Join-Path $PWD $_
-              if (Test-Path $full) { $full } else { Write-Host "[WARN] Path not found: $_"; $null }
-          } | Where-Object { $_ -ne $null }
-
-          if ($existingPaths.Count -eq 0) {
-              Write-Error "No files/folders found to compress. Exiting."
+          $response = Invoke-RestMethod -Uri $apiUrl -Headers $headers -Method Get
+          if ($null -eq $response.items -or $response.items.Count -eq 0) {
+              Write-Host "[ERROR] No full-repo versions found in Nexus!"
               exit 1
           }
 
-          # 7-Zip: pass each path separately
-          & "$sevenZip" a -tzip "$artifactZip" $existingPaths -mx=1
-          Write-Host "✅ Artifact packaged at: $artifactZip"
-
-          # Upload to Nexus
-          $zipFileName = Split-Path $artifactZip -Leaf
-          $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/$version/$zipFileName"
-          Write-Host "[INFO] Uploading $artifactZip to Nexus → $serverUrl"
-          Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $artifactZip -Headers $headers -ContentType "application/zip"
-          Write-Host "✅ Artifact uploaded successfully."
-
-      # 2️⃣ Download & extract artifact for deployment
-      - name: Juice Shop Deployment
-        shell: powershell
-        run: |
-          Write-Host "[INFO] Starting deployment..."
-          if (Test-Path $env:DEPLOY_PATH) { Remove-Item -Recurse -Force $env:DEPLOY_PATH }
-          New-Item -ItemType Directory -Path $env:DEPLOY_PATH | Out-Null
-
-          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
-          $headers = @{ Authorization = "Basic $base64Auth" }
-
-          $apiUrl = "http://127.0.0.1:8081/service/rest/v1/search?repository=JuiceShopMavenDemo&group=com.example.juiceshop&name=full-repo"
-          $response = Invoke-RestMethod -Uri $apiUrl -Headers $headers -Method Get
           $latest = $response.items | Sort-Object { $_.version } -Descending | Select-Object -First 1
           $latestVersion = $latest.version
           $zipDownloadUrl = $latest.assets[0].downloadUrl
+          Write-Host "[INFO] Latest version: $latestVersion"
+          Write-Host "[INFO] Download URL: $zipDownloadUrl"
 
           $zipFilePath = Join-Path $env:DEPLOY_PATH "full-repo-$latestVersion.zip"
           Invoke-WebRequest -Uri $zipDownloadUrl -OutFile $zipFilePath -Headers $headers
           Expand-Archive -Path $zipFilePath -DestinationPath $env:DEPLOY_PATH -Force
-          Write-Host "✅ Artifact extracted to $env:DEPLOY_PATH"
+          Write-Host "✅ Artifact downloaded and extracted successfully."
 
-      # 3️⃣ Deploy frontend to IIS
+      # 2️⃣ Deploy Frontend to IIS
       - name: Deploy Frontend to IIS
         shell: powershell
         run: |
           Import-Module WebAdministration
           $src = Join-Path $env:DEPLOY_PATH "frontend\dist\frontend"
-          $dest = "C:\\inetpub\\wwwroot\\$env:IIS_SITE"
+          $dest = "C:\inetpub\wwwroot\$env:IIS_SITE"
+
           if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
           New-Item -ItemType Directory -Path $dest -Force | Out-Null
           Copy-Item -Path "$src\*" -Destination $dest -Recurse -Force
@@ -111,7 +76,7 @@ jobs:
           Restart-WebAppPool -Name $env:IIS_APPPOOL
           Write-Host "✅ Frontend deployed to IIS"
 
-      # 4️⃣ Deploy backend Node.js via NSSM
+      # 3️⃣ Deploy Backend Node.js via NSSM
       - name: Deploy Backend Node.js
         shell: powershell
         run: |
