@@ -29,19 +29,19 @@ jobs:
           $artifactZip = Join-Path $env:ARTIFACT_DIR $env:ARTIFACT_NAME
 
           # Only include paths that exist
-          $pathsToZip = @(
-              "frontend\dist\frontend",
-              "build",
-              "node_modules",
-              "package.json"
-          )
+          $pathsToZip = @()
+          if (Test-Path "frontend\dist\frontend") { $pathsToZip += "frontend\dist\frontend" }
+          if (Test-Path "build") { $pathsToZip += "build" }
+          if (Test-Path "node_modules") { $pathsToZip += "node_modules" }
+          if (Test-Path "package.json") { $pathsToZip += "package.json" }
           if (Test-Path "web.config") { $pathsToZip += "web.config" }
 
-          # Convert array to string for 7-Zip CLI
-          $pathsString = $pathsToZip -join " "
-
-          & "$env:SEVEN_ZIP_EXE" a -tzip $artifactZip $pathsString -mx=9
-          Write-Host "✅ Artifact packaged at: $artifactZip"
+          if ($pathsToZip.Count -eq 0) {
+              Write-Host "⚠️ No files found to package. Skipping artifact creation."
+          } else {
+              & "$env:SEVEN_ZIP_EXE" a -tzip $artifactZip @pathsToZip -mx=9
+              Write-Host "✅ Artifact packaged at: $artifactZip"
+          }
 
       # 2️⃣ Upload artifact to Nexus
       - name: Upload artifact to Nexus
