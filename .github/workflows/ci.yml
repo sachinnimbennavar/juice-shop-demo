@@ -14,11 +14,10 @@ jobs:
       NODE_EXE: "C:\\Program Files\\nodejs\\node.exe"
       NSSM_EXE: "C:\\SSDLC\\nssm-2.24\\nssm-2.24\\win64\\nssm.exe"
       ARTIFACT_DIR: "C:\\SSDLC\\ci-artifacts"
-      MAVEN_EXE: "C:\\Program Files\\Apache\\Maven\\bin\\mvn.cmd" # Update if different
 
     steps:
-      # 1️⃣ Upload artifact to Nexus (Maven)
-      - name: Upload artifact to Nexus (Maven)
+      # 1️⃣ Upload artifact to Nexus
+      - name: Upload artifact to Nexus
         shell: powershell
         env:
           NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
@@ -26,26 +25,31 @@ jobs:
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
           $version = (Get-Date -Format "yyyyMMddHHmmss")
-          $artifactZip = Join-Path $env:ARTIFACT_DIR "full-repo-$version.zip"
+          $serverZip = Join-Path $env:ARTIFACT_DIR "full-repo-$version.zip"
+          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
+          $headers = @{ Authorization = "Basic $base64Auth" }
 
-          Write-Host "[INFO] Uploading $artifactZip to Nexus Maven repository..."
+          if (Test-Path $serverZip) { Remove-Item $serverZip -Force }
 
-          & $env:MAVEN_EXE deploy:deploy-file `
-              -DgroupId=com.example.juiceshop `
-              -DartifactId=full-repo `
-              -Dversion=$version `
-              -Dpackaging=zip `
-              -Dfile=$artifactZip `
-              -DrepositoryId=juiceshop-repo `
-              -Durl=$env:NEXUS_URL `
-              -Dusername=$env:NEXUS_USERNAME `
-              -Dpassword=$env:NEXUS_PASSWORD
+          # Include backend node_modules in addition to build_output
+          Compress-Archive -Path `
+            "build_output/*", `
+            "node_modules" `
+            -DestinationPath $serverZip -Force
 
-          Write-Host "✅ Artifact uploaded successfully to Maven repo."
+          $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/$version/$serverZip"
+          Write-Host "[INFO] Uploading $serverZip to Nexus → $serverUrl"
+          Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $serverZip -Headers $headers -ContentType "application/zip"
+          Write-Host "✅ Artifact uploaded successfully."
 
       # 2️⃣ Download & extract artifact for deployment
       - name: Juice Shop Deployment
         shell: powershell
+        env:
+          NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+          DEPLOY_PATH: "C:\\SSDLC\\Nexus_Unzips"
         run: |
           Write-Host "[INFO] Starting deployment..."
           if (Test-Path $env:DEPLOY_PATH) { Remove-Item -Recurse -Force $env:DEPLOY_PATH }
@@ -68,6 +72,10 @@ jobs:
       # 3️⃣ Deploy frontend to IIS
       - name: Deploy Frontend to IIS
         shell: powershell
+        env:
+          DEPLOY_PATH: "C:\\SSDLC\\Nexus_Unzips"
+          IIS_SITE: "JuiceShop"
+          IIS_APPPOOL: "JuiceShopAppPool"
         run: |
           Import-Module WebAdministration
           $src = Join-Path $env:DEPLOY_PATH "frontend\dist\frontend"
@@ -92,6 +100,10 @@ jobs:
       # 4️⃣ Deploy backend Node.js via NSSM
       - name: Deploy Backend Node.js
         shell: powershell
+        env:
+          DEPLOY_PATH: "C:\\SSDLC\\Nexus_Unzips"
+          NODE_EXE: "C:\\Program Files\\nodejs\\node.exe"
+          NSSM_EXE: "C:\\SSDLC\\nssm-2.24\\nssm-2.24\\win64\\nssm.exe"
         run: |
           $serviceName = "JuiceShopServer"
           $nodeExe = $env:NODE_EXE
