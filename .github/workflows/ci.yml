@@ -1,4 +1,4 @@
-name: Juice Shop IIS Deployment Without Build
+name: Juice Shop IIS Deployment Optimized
 
 on:
   workflow_dispatch:
@@ -8,10 +8,11 @@ jobs:
     runs-on: self-hosted
 
     steps:
-      - name: Checkout repository
+      - name: Checkout repository (optimized)
         uses: actions/checkout@v3
         with:
-          fetch-depth: 1
+          fetch-depth: 1          # shallow clone
+          persist-credentials: false
 
       - name: Create missing provider-metadata.json to avoid ENOENT error
         shell: powershell
@@ -28,7 +29,7 @@ jobs:
       - name: Verify frontend build exists
         shell: powershell
         run: |
-          $frontendBuildPath = "frontend\dist\frontend"
+          $frontendBuildPath = "frontend\dist\juice-shop-frontend"
           if (-not (Test-Path $frontendBuildPath)) {
             Write-Error "Frontend build folder not found: $frontendBuildPath"
             exit 1
@@ -46,17 +47,17 @@ jobs:
       - name: Juice Shop IIS Deployment
         shell: powershell
         env:
-          DEPLOY_PATH: C:\DeleteafterTest\veryLatest
+          DEPLOY_PATH: C:\DeleteafterTest\veryLatest\full-repo-20251025220209
           IIS_SITE_NAME: JuiceShopDemo
           IIS_ROOT: C:\inetpub\wwwroot
-          FRONTEND_SOURCE: C:\DeleteafterTest\veryLatest\frontend\dist\frontend
-          SERVER_SOURCE: C:\DeleteafterTest\veryLatest\server
+          FRONTEND_SOURCE: C:\DeleteafterTest\veryLatest\full-repo-20251025220209\frontend\dist\juice-shop-frontend
+          SERVER_SOURCE: C:\DeleteafterTest\veryLatest\full-repo-20251025220209\server
         run: |
           Write-Host "=== Juice Shop IIS Deployment Started ==="
 
           Import-Module WebAdministration
 
-          # Stop existing IIS site if exists
+          # Stop existing IIS site if it exists
           $site = Get-Website -Name $env:IIS_SITE_NAME -ErrorAction SilentlyContinue
           if ($null -ne $site) {
               Write-Host "[INFO] Stopping existing IIS site $($env:IIS_SITE_NAME)..."
