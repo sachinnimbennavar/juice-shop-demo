@@ -7,20 +7,74 @@ on:
   pull_request:
     branches:
       - main
-  workflow_dispatch:  # Manual trigger
+  workflow_dispatch: # Manual trigger
 
 jobs:
   build-and-deploy:
     runs-on: self-hosted
 
     steps:
-      # 1️⃣ Checkout repository (shallow fetch for speed)
+      # 1️⃣ Checkout the repository
       - name: Checkout repository
         uses: actions/checkout@v3
         with:
           fetch-depth: 1
 
-      # 2️⃣ Nexus Upload Phase (replaced with verified working code)
+      # 2️⃣ Set Node memory for server build
+      - name: Set Node memory
+        run: set NODE_OPTIONS=--max_old_space_size=4096
+
+      # 3️⃣ Cache frontend dependencies and Angular build output
+      - name: Cache frontend
+        uses: actions/cache@v3
+        with:
+          path: |
+            frontend/node_modules
+            frontend/dist
+            frontend/.angular
+          key: ${{ runner.os }}-frontend-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-frontend-
+
+      # 4️⃣ Cache server dependencies
+      - name: Cache server
+        uses: actions/cache@v3
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-server-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-server-
+
+      # 5️⃣ Install frontend dependencies
+      - name: Install frontend dependencies
+        run: |
+          cd frontend
+          npm install --legacy-peer-deps --prefer-offline --no-audit
+          cd ..
+
+      # 6️⃣ Build frontend (Angular incremental build handled automatically)
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm run build -- --configuration production --watch=false --verbose
+          cd ..
+
+      # 7️⃣ Install server dependencies
+      - name: Install server dependencies
+        run: npm install --prefer-offline --no-audit
+
+      # 8️⃣ Build server
+      - name: Build server
+        run: npm run build:server
+
+      # 9️⃣ Optional SonarQube analysis (safe skip if not installed)
+      - name: SonarQube Analysis (Optional)
+        if: always()
+        run: |
+          Write-Host "Skipping SonarQube analysis since it's optional."
+        shell: pwsh
+
+      # 🔟 Nexus Upload Phase
       - name: 📦 Create & Upload Full Repo ZIP to Nexus
         shell: powershell
         env:
@@ -76,48 +130,6 @@ jobs:
           Write-Host "⬆️ Uploading to Nexus → $serverUrl"
           Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $serverZip -Headers $headers -ContentType "application/zip"
           Write-Host "✅ Full repo uploaded successfully."
-      # 3️⃣ Set Node memory for server build
-      - name: Set Node memory
-        run: set NODE_OPTIONS=--max_old_space_size=4096
-
-      # 4️⃣ Cache frontend dependencies and Angular build output
-      - name: Cache frontend
-        uses: actions/cache@v3
-        with:
-          path: |
-            frontend/node_modules
-            frontend/dist
-            frontend/.angular
-          key: ${{ runner.os }}-frontend-${{ hashFiles('frontend/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-frontend-
-      # 5️⃣ Cache server dependencies
-      - name: Cache server
-        uses: actions/cache@v3
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-server-${{ hashFiles('package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-server-
-      # 6️⃣ Install frontend dependencies
-      - name: Install frontend dependencies
-        run: |
-          cd frontend
-          npm install --legacy-peer-deps --prefer-offline --no-audit
-          cd ..
-      # 7️⃣ Build frontend
-      - name: Build frontend
-        run: |
-          cd frontend
-          npm run build -- --configuration production --watch=false --verbose
-          cd ..
-      # 8️⃣ Install server dependencies
-      - name: Install server dependencies
-        run: npm install --prefer-offline --no-audit
-
-      # 9️⃣ Build server
-      - name: Build server
-        run: npm run build:server
 
       # 11️⃣ Juice Shop Deployment (download & unzip latest Nexus ZIP)
       - name: Juice Shop Deployment
@@ -130,19 +142,16 @@ jobs:
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
           Write-Host "[INFO] Starting deployment..."
-          # Clear deployment folder for fresh unzip
           if (Test-Path $env:DEPLOY_PATH) {
               Write-Host "[INFO] Clearing existing files from $env:DEPLOY_PATH ..."
               Remove-Item -Path "$env:DEPLOY_PATH\*" -Recurse -Force
           } else {
               New-Item -ItemType Directory -Path $env:DEPLOY_PATH -Force | Out-Null
           }
-          # Prepare Basic Auth
           $base64Auth = [System.Convert]::ToBase64String(
               [System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}")
           )
           $headers = @{ Authorization = "Basic $base64Auth" }
-          # Fetch all full-repo components from Nexus
           $apiUrl = "${env:NEXUS_URL}/service/rest/v1/search?repository=${env:NEXUS_REPO}&group=com.example.juiceshop&name=full-repo"
           Write-Host "[INFO] Fetching available versions from $apiUrl ..."
           $response = Invoke-RestMethod -Uri $apiUrl -Headers $headers -Method Get
@@ -150,13 +159,11 @@ jobs:
               Write-Host "[ERROR] No full-repo versions found in Nexus!"
               exit 1
           }
-          # Find the latest version by timestamp
           $latest = $response.items | Sort-Object { $_.version } -Descending | Select-Object -First 1
           $latestVersion = $latest.version
           $zipDownloadUrl = $latest.assets[0].downloadUrl
           Write-Host "[INFO] Latest version: $latestVersion"
           Write-Host "[INFO] Download URL: $zipDownloadUrl"
-          # Download ZIP
           $zipFilePath = Join-Path $env:DEPLOY_PATH "full-repo-$latestVersion.zip"
           Write-Host "[INFO] Downloading full repo ZIP to $zipFilePath ..."
           Invoke-WebRequest -Uri $zipDownloadUrl -OutFile $zipFilePath -Headers $headers
@@ -164,7 +171,6 @@ jobs:
               Write-Host "[ERROR] Failed to download ZIP!"
               exit 1
           }
-          # Unzip
           Write-Host "[INFO] Extracting ZIP to $env:DEPLOY_PATH ..."
           Expand-Archive -Path $zipFilePath -DestinationPath $env:DEPLOY_PATH -Force
           Write-Host "✅ Deployment completed successfully! Latest full-repo version: $latestVersion"
