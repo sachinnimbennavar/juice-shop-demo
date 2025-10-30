@@ -1,10 +1,10 @@
-name: Test Prepare, Upload & Download Artifact
+name: Juice Shop Artifact Upload & Deployment Test
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # manual trigger
 
 jobs:
-  prepare-upload-download:
+  artifact-test:
     runs-on: self-hosted
 
     steps:
@@ -24,7 +24,7 @@ jobs:
                   if (!(Test-Path $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
                   Copy-Item -Path $item -Destination $dest -Recurse -Force
               } else {
-                  Write-Host "[WARN] File/folder not found: $item"
+                  Write-Host "⚠️ Item not found: $item, skipping..."
               }
           }
           Write-Host "[INFO] Deployment-ready artifact prepared at $artifactFolder"
@@ -43,11 +43,12 @@ jobs:
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
           $uploadUrl = "${env:NEXUS_URL}/com/example/juiceshop/artifacts/$version/$zipName"
+          Write-Host "[INFO] Uploading $zipName to Nexus at $uploadUrl ..."
           Invoke-RestMethod -Uri $uploadUrl -Method Put -InFile $zipName -Headers $headers -ContentType "application/zip"
-          Write-Host "[INFO] Artifact uploaded to Nexus: $zipName"
+          Write-Host "[INFO] Artifact uploaded successfully"
 
       # 3️⃣ Download & unzip latest artifact from Nexus
-      - name: Juice Shop Deployment (Download & Unzip)
+      - name: Download & unzip latest artifact
         shell: powershell
         env:
           NEXUS_URL: http://127.0.0.1:8081
@@ -56,14 +57,13 @@ jobs:
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
-          Write-Host "[INFO] Starting deployment..."
+          Write-Host "[INFO] Starting deployment test..."
           if (Test-Path $env:DEPLOY_PATH) { Remove-Item "$env:DEPLOY_PATH\*" -Recurse -Force } else { New-Item -ItemType Directory -Path $env:DEPLOY_PATH -Force | Out-Null }
 
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
 
-          $apiUrl = "${env:NEXUS_URL}/service/rest/v1/search?repository=${env:NEXUS_REPO}&group=com.example.juiceshop&name=artifacts"
-          Write-Host "[INFO] Fetching available versions from Nexus..."
+          $apiUrl = "${env:NEXUS_URL}/service/rest/v1/search?repository=${env:NEXUS_REPO}&group=com.example.juiceshop&name=full-repo"
           $response = Invoke-RestMethod -Uri $apiUrl -Headers $headers -Method Get
 
           if ($null -eq $response.items -or $response.items.Count -eq 0) { Write-Error "No builds found in Nexus!"; exit 1 }
@@ -75,7 +75,7 @@ jobs:
           Write-Host "[INFO] Latest version: $latestVersion"
           Write-Host "[INFO] Download URL: $zipUrl"
 
-          $zipFile = Join-Path $env:DEPLOY_PATH "juiceshop-build-$latestVersion.zip"
+          $zipFile = Join-Path $env:DEPLOY_PATH "full-repo-$latestVersion.zip"
           Invoke-WebRequest -Uri $zipUrl -OutFile $zipFile -Headers $headers
 
           if (-Not (Test-Path $zipFile)) { Write-Error "Failed to download ZIP!"; exit 1 }
