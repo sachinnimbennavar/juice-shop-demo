@@ -18,7 +18,7 @@ jobs:
 
     steps:
 
-      # 1️⃣ Upload artifact to Nexus
+      # 1️⃣ Upload artifact to Nexus using 7-Zip (fixed)
       - name: Upload artifact to Nexus
         shell: powershell
         env:
@@ -27,14 +27,15 @@ jobs:
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
           $version = (Get-Date -Format "yyyyMMddHHmmss")
-          $serverZip = Join-Path $env:ARTIFACT_DIR "full-repo-$version.zip"
+          $artifactZip = Join-Path $env:ARTIFACT_DIR "full-repo-$version.zip"
+          $sevenZip = $env:SEVENZIP_EXE
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
 
-          if (Test-Path $serverZip) { Remove-Item $serverZip -Force }
+          if (Test-Path $artifactZip) { Remove-Item $artifactZip -Force }
 
-          # Files/folders to include
-          $pathsToCompress = @(
+          # Paths to include
+          $paths = @(
               "frontend\dist\frontend",
               "build",
               "node_modules",
@@ -42,27 +43,30 @@ jobs:
               "web.config"
           )
 
-          # Only include existing paths
-          $existingPaths = $pathsToCompress | Where-Object { Test-Path $_ }
+          # Resolve full paths and include only existing ones
+          $existingPaths = $paths | ForEach-Object {
+              $full = Join-Path $PWD $_
+              if (Test-Path $full) { $full } else { Write-Host "[WARN] Path not found: $_"; $null }
+          } | Where-Object { $_ -ne $null }
 
           if ($existingPaths.Count -eq 0) {
               Write-Error "No files/folders found to compress. Exiting."
               exit 1
           }
 
-          # Quote each path for 7-Zip
+          # Quote paths for 7-Zip
           $quotedPaths = $existingPaths | ForEach-Object { "`"$_`"" }
-          $quotedPathsStr = $quotedPaths -join " "
+          $pathsStr = $quotedPaths -join " "
 
-          # Package with 7-Zip (fast compression)
-          & "$env:SEVENZIP_EXE" a -tzip "$serverZip" $quotedPathsStr -mx=1
-          Write-Host "✅ Artifact packaged at: $serverZip"
+          # Package with 7-Zip
+          & "$sevenZip" a -tzip "$artifactZip" $pathsStr -mx=1
+          Write-Host "✅ Artifact packaged at: $artifactZip"
 
-          # Upload to Nexus (use only filename in URL)
-          $zipFileName = Split-Path $serverZip -Leaf
+          # Upload to Nexus (filename only)
+          $zipFileName = Split-Path $artifactZip -Leaf
           $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/$version/$zipFileName"
-          Write-Host "[INFO] Uploading $serverZip to Nexus → $serverUrl"
-          Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $serverZip -Headers $headers -ContentType "application/zip"
+          Write-Host "[INFO] Uploading $artifactZip to Nexus → $serverUrl"
+          Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $artifactZip -Headers $headers -ContentType "application/zip"
           Write-Host "✅ Artifact uploaded successfully."
 
       # 2️⃣ Download & extract artifact for deployment
