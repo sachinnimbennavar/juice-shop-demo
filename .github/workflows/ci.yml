@@ -26,13 +26,18 @@ jobs:
           New-Item -ItemType Directory -Path $env:ARTIFACT_DIR | Out-Null
 
           $artifactZip = Join-Path $env:ARTIFACT_DIR $env:ARTIFACT_NAME
-          Compress-Archive -Path `
-            "frontend\dist\frontend", `
-            "build", `
-            "node_modules", `
-            "package.json", `
-            "web.config" `
-            -DestinationPath $artifactZip -Force
+
+          # Only include paths that exist
+          $pathsToZip = @(
+              "frontend\dist\frontend",
+              "build",
+              "node_modules",
+              "package.json"
+          )
+
+          if (Test-Path "web.config") { $pathsToZip += "web.config" }
+
+          Compress-Archive -Path $pathsToZip -DestinationPath $artifactZip -Force
           Write-Host "✅ Artifact packaged at: $artifactZip"
 
       # 2️⃣ Upload artifact to Nexus
