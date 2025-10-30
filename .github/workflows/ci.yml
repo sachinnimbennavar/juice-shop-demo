@@ -1,4 +1,4 @@
-name: Juice Shop Deployment Only (7-Zip Artifact)
+name: Juice Shop Deployment (7-Zip, Manual Run)
 
 on:
   workflow_dispatch:
@@ -17,7 +17,8 @@ jobs:
       SEVENZIP_EXE: "C:\\Program Files\\7-Zip\\7z.exe"
 
     steps:
-      # 1️⃣ Upload artifact to Nexus using 7-Zip
+
+      # 1️⃣ Upload artifact to Nexus
       - name: Upload artifact to Nexus
         shell: powershell
         env:
@@ -41,18 +42,25 @@ jobs:
               "web.config"
           )
 
-          # Only include existing paths (skips missing web.config)
+          # Only include existing paths
           $existingPaths = $pathsToCompress | Where-Object { Test-Path $_ }
 
-          # Convert paths to 7-Zip string
-          $existingPathsStr = $existingPaths -join " "
+          if ($existingPaths.Count -eq 0) {
+              Write-Error "No files/folders found to compress. Exiting."
+              exit 1
+          }
+
+          # Quote each path for 7-Zip
+          $quotedPaths = $existingPaths | ForEach-Object { "`"$_`"" }
+          $quotedPathsStr = $quotedPaths -join " "
 
           # Package with 7-Zip (fast compression)
-          & "$env:SEVENZIP_EXE" a -tzip "$serverZip" $existingPathsStr -mx=1
+          & "$env:SEVENZIP_EXE" a -tzip "$serverZip" $quotedPathsStr -mx=1
           Write-Host "✅ Artifact packaged at: $serverZip"
 
-          # Upload to Nexus
-          $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/$version/$serverZip"
+          # Upload to Nexus (use only filename in URL)
+          $zipFileName = Split-Path $serverZip -Leaf
+          $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/$version/$zipFileName"
           Write-Host "[INFO] Uploading $serverZip to Nexus → $serverUrl"
           Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $serverZip -Headers $headers -ContentType "application/zip"
           Write-Host "✅ Artifact uploaded successfully."
@@ -60,11 +68,6 @@ jobs:
       # 2️⃣ Download & extract artifact for deployment
       - name: Juice Shop Deployment
         shell: powershell
-        env:
-          NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
-          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
-          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
-          DEPLOY_PATH: "C:\\SSDLC\\Nexus_Unzips"
         run: |
           Write-Host "[INFO] Starting deployment..."
           if (Test-Path $env:DEPLOY_PATH) { Remove-Item -Recurse -Force $env:DEPLOY_PATH }
@@ -87,10 +90,6 @@ jobs:
       # 3️⃣ Deploy frontend to IIS
       - name: Deploy Frontend to IIS
         shell: powershell
-        env:
-          DEPLOY_PATH: "C:\\SSDLC\\Nexus_Unzips"
-          IIS_SITE: "JuiceShop"
-          IIS_APPPOOL: "JuiceShopAppPool"
         run: |
           Import-Module WebAdministration
           $src = Join-Path $env:DEPLOY_PATH "frontend\dist\frontend"
@@ -115,10 +114,6 @@ jobs:
       # 4️⃣ Deploy backend Node.js via NSSM
       - name: Deploy Backend Node.js
         shell: powershell
-        env:
-          DEPLOY_PATH: "C:\\SSDLC\\Nexus_Unzips"
-          NODE_EXE: "C:\\Program Files\\nodejs\\node.exe"
-          NSSM_EXE: "C:\\SSDLC\\nssm-2.24\\nssm-2.24\\win64\\nssm.exe"
         run: |
           $serviceName = "JuiceShopServer"
           $nodeExe = $env:NODE_EXE
