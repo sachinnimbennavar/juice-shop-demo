@@ -1,33 +1,32 @@
 name: Juice Shop Manual Deployment (Frontend IIS + Backend Node.js)
 
 on:
-  workflow_dispatch:  # Manual trigger
+  workflow_dispatch:
 
 jobs:
   deploy-only:
     runs-on: self-hosted
 
     env:
-      DEPLOY_PATH: C:\SSDLC\Nexus_Unzips_backup
+      DEPLOY_PATH: C:/SSDLC/Nexus_Unzips_backup
       IIS_SITE: JuiceShop
       IIS_APPPOOL: JuiceShopAppPool
-      NODE_PATH: "C:\Program Files\nodejs\node.exe"
-      NSSM_EXE: "C:\SSDLC\nssm-2.24\nssm-2.24\win64\nssm.exe"
-      NODE_MODULES_PATH: "C:\SSDLC\Nexus_Unzips_backup\i18n"  # i18n module path
+      NODE_PATH: C:/Program Files/nodejs/node.exe
+      NSSM_EXE: C:/SSDLC/nssm-2.24/nssm-2.24/win64/nssm.exe
+      NODE_MODULES_PATH: C:/SSDLC/Nexus_Unzips_backup/i18n
 
     steps:
-      # 1️⃣ Deploy Frontend to IIS
       - name: Deploy Frontend to IIS
         shell: powershell
         run: |
           Import-Module WebAdministration
           Write-Host "[INFO] Deploying frontend to IIS..."
-          $src = Join-Path $env:DEPLOY_PATH "frontend\dist\frontend"
-          $dest = "C:\inetpub\wwwroot\$env:IIS_SITE"
+          $src = Join-Path $env:DEPLOY_PATH "frontend/dist/frontend"
+          $dest = "C:/inetpub/wwwroot/$env:IIS_SITE"
 
           if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
           New-Item -ItemType Directory -Path $dest -Force | Out-Null
-          Copy-Item -Path "$src\*" -Destination $dest -Recurse -Force
+          Copy-Item -Path "$src/*" -Destination $dest -Recurse -Force
 
           if (-not (Test-Path "IIS:\AppPools\$env:IIS_APPPOOL")) {
               Write-Host "[INFO] Creating App Pool: $env:IIS_APPPOOL ..."
@@ -35,18 +34,16 @@ jobs:
               Set-ItemProperty "IIS:\AppPools\$env:IIS_APPPOOL" -Name processModel.identityType -Value "ApplicationPoolIdentity"
           }
 
-          Write-Host "[INFO] Assigning App Pool to site..."
           Set-ItemProperty "IIS:\Sites\$env:IIS_SITE" -Name applicationPool -Value $env:IIS_APPPOOL
           Restart-WebAppPool -Name $env:IIS_APPPOOL
           Write-Host "✅ Frontend deployed to IIS"
 
-      # 2️⃣ Deploy Backend Node.js via NSSM
       - name: Deploy Backend Node.js Service via NSSM
         shell: powershell
         run: |
           $serviceName = "JuiceShopServer"
           $nodeExe = $env:NODE_PATH
-          $serverJs = Join-Path $env:DEPLOY_PATH "build\server.js"
+          $serverJs = Join-Path $env:DEPLOY_PATH "build/server.js"
           $nssmExe = $env:NSSM_EXE
           $nodeModulesPath = $env:NODE_MODULES_PATH
 
@@ -54,8 +51,8 @@ jobs:
               Write-Host "[INFO] Installing Node.js backend service via NSSM..."
               & $nssmExe install $serviceName $nodeExe $serverJs
               & $nssmExe set $serviceName AppDirectory (Join-Path $env:DEPLOY_PATH "build")
-              & $nssmExe set $serviceName AppStdout (Join-Path $env:DEPLOY_PATH "build\server-out.log")
-              & $nssmExe set $serviceName AppStderr (Join-Path $env:DEPLOY_PATH "build\server-err.log")
+              & $nssmExe set $serviceName AppStdout (Join-Path $env:DEPLOY_PATH "build/server-out.log")
+              & $nssmExe set $serviceName AppStderr (Join-Path $env:DEPLOY_PATH "build/server-err.log")
               & $nssmExe set $serviceName Environment "NODE_PATH=$nodeModulesPath"
           }
 
