@@ -1,10 +1,16 @@
-name: Juice Shop Manual Deployment (Frontend IIS + Backend Node.js)
+name: Juice Shop CI/CD Full Pipeline (Build → Nexus → IIS + Node)
 
 on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
-  deploy-only:
+  build-deploy:
     runs-on: self-hosted
 
     env:
@@ -13,17 +19,94 @@ jobs:
       IIS_APPPOOL: "JuiceShopAppPool"
       NODE_EXE: "C:\\Program Files\\nodejs\\node.exe"
       NSSM_EXE: "C:\\SSDLC\\nssm-2.24\\nssm-2.24\\win64\\nssm.exe"
+      ARTIFACT_DIR: "C:\\SSDLC\\Artifacts"
+      ARTIFACT_NAME: "juice-shop-artifact.zip"
 
     steps:
+      # 1️⃣ Checkout repository (shallow for speed)
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 1
+
+      # 2️⃣ Set Node memory
+      - name: Set Node memory
+        run: set NODE_OPTIONS=--max_old_space_size=4096
+
+      # 3️⃣ Cache frontend dependencies & Angular build
+      - name: Cache frontend
+        uses: actions/cache@v3
+        with:
+          path: |
+            frontend/node_modules
+            frontend/dist
+            frontend/.angular
+          key: ${{ runner.os }}-frontend-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-frontend-
+
+      # 4️⃣ Cache server dependencies
+      - name: Cache server
+        uses: actions/cache@v3
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-server-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-server-
+
+      # 5️⃣ Install frontend dependencies
+      - name: Install frontend dependencies
+        run: |
+          cd frontend
+          npm install --legacy-peer-deps --prefer-offline --no-audit
+          cd ..
+
+      # 6️⃣ Build frontend
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm run build -- --configuration production --watch=false --verbose
+          cd ..
+
+      # 7️⃣ Install backend dependencies
+      - name: Install backend dependencies
+        run: npm install --prefer-offline --no-audit
+
+      # 8️⃣ Build backend
+      - name: Build backend
+        run: npm run build:server
+
+      # 9️⃣ Package and upload artifact to Nexus
+      - name: Package and upload artifact
+        shell: powershell
+        run: |
+          $artifactDir = $env:ARTIFACT_DIR
+          $artifactZip = Join-Path $artifactDir $env:ARTIFACT_NAME
+          if (!(Test-Path $artifactDir)) { New-Item -ItemType Directory -Path $artifactDir | Out-Null }
+
+          Compress-Archive -Path `
+            "frontend\dist\frontend", `
+            "build", `
+            "node_modules", `
+            "package.json", `
+            "server.js" `
+            -DestinationPath $artifactZip -Force
+
+          Write-Host "✅ Artifact packaged at: $artifactZip"
+          # (Optional) Upload to Nexus logic can be added here if needed.
+
+      # 🔟 Deploy Frontend to IIS
       - name: Deploy Frontend to IIS
         shell: powershell
         run: |
           Import-Module WebAdministration
           $src = Join-Path $env:DEPLOY_PATH "frontend\dist\frontend"
           $dest = "C:\\inetpub\\wwwroot\\$env:IIS_SITE"
+
           if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
           New-Item -ItemType Directory -Path $dest -Force | Out-Null
           Copy-Item -Path "$src\*" -Destination $dest -Recurse -Force
+
           if (-not (Test-Path "IIS:\AppPools\$env:IIS_APPPOOL")) {
               New-WebAppPool -Name $env:IIS_APPPOOL | Out-Null
               Set-ItemProperty "IIS:\AppPools\$env:IIS_APPPOOL" -Name processModel.identityType -Value "ApplicationPoolIdentity"
@@ -33,24 +116,33 @@ jobs:
           } else {
               Set-ItemProperty "IIS:\Sites\$env:IIS_SITE" -Name applicationPool -Value $env:IIS_APPPOOL
           }
-          Restart-WebAppPool -Name $env:IIS_APPPOOL
 
-      - name: Deploy Backend Node.js via NSSM
+          Restart-WebAppPool -Name $env:IIS_APPPOOL
+          Write-Host "✅ Frontend deployed successfully to IIS"
+
+      # 1️⃣1️⃣ Deploy Backend (Node.js) via NSSM
+      - name: Deploy Backend via NSSM
         shell: powershell
         run: |
           $serviceName = "JuiceShopServer"
           $nodeExe = $env:NODE_EXE
           $serverJs = Join-Path $env:DEPLOY_PATH "build\server.js"
           $nssmExe = $env:NSSM_EXE
+
           if (-not (Get-Service -Name $serviceName -ErrorAction SilentlyContinue)) {
               & $nssmExe install $serviceName $nodeExe $serverJs
               & $nssmExe set $serviceName AppDirectory (Join-Path $env:DEPLOY_PATH "build")
               & $nssmExe set $serviceName AppStdout (Join-Path $env:DEPLOY_PATH "build\server-out.log")
               & $nssmExe set $serviceName AppStderr (Join-Path $env:DEPLOY_PATH "build\server-err.log")
           }
+
           $svc = Get-Service -Name $serviceName
           if ($svc.Status -eq "Running") {
               Restart-Service $serviceName -Force
+              Write-Host "♻️ Backend service restarted successfully"
           } else {
               Start-Service $serviceName
+              Write-Host "🚀 Backend service started successfully"
           }
+
+          Write-Host "✅ Deployment Complete!"
