@@ -1,4 +1,4 @@
-name: Juice Shop Deployment (7-Zip, Manual Run)
+name: Juice Shop Full CI/CD Deployment (Manual Run, Fixed)
 
 on:
   workflow_dispatch:
@@ -54,15 +54,11 @@ jobs:
               exit 1
           }
 
-          # Quote paths for 7-Zip
-          $quotedPaths = $existingPaths | ForEach-Object { "`"$_`"" }
-          $pathsStr = $quotedPaths -join " "
-
-          # Package with 7-Zip
-          & "$sevenZip" a -tzip "$artifactZip" $pathsStr -mx=1
+          # 7-Zip: pass each path separately
+          & "$sevenZip" a -tzip "$artifactZip" $existingPaths -mx=1
           Write-Host "✅ Artifact packaged at: $artifactZip"
 
-          # Upload to Nexus (filename only)
+          # Upload to Nexus
           $zipFileName = Split-Path $artifactZip -Leaf
           $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/$version/$zipFileName"
           Write-Host "[INFO] Uploading $artifactZip to Nexus → $serverUrl"
