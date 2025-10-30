@@ -1,32 +1,26 @@
 name: Juice Shop Manual Deployment (Frontend IIS + Backend Node.js)
 
 on:
-  workflow_dispatch:  # Manual trigger
+  workflow_dispatch:
 
 jobs:
   deploy-only:
     runs-on: self-hosted
 
-    env:
-      DEPLOY_PATH: C:\SSDLC\Nexus_Unzips
-      IIS_SITE: JuiceShop
-      IIS_APPPOOL: JuiceShopAppPool
-      NODE_PATH: "C:\Program Files\nodejs\node.exe"
-      NSSM_PATH: "C:\SSDLC\nssm-2.24\nssm-2.24\win64\nssm.exe"
-
     steps:
       # 1️⃣ Deploy Frontend to IIS
       - name: Deploy Frontend to IIS
         shell: powershell
+        env:
+          DEPLOY_PATH: C:\SSDLC\Nexus_Unzips
+          IIS_SITE_PATH: C:\inetpub\wwwroot\JuiceShop
+          IIS_APPPOOL: JuiceShopAppPool
         run: |
           Import-Module WebAdministration
           Write-Host "[INFO] Deploying frontend to IIS..."
-          $src = Join-Path $env:DEPLOY_PATH "frontend\dist\frontend"
-          $dest = "C:\inetpub\wwwroot\$env:IIS_SITE"
-
-          if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
-          New-Item -ItemType Directory -Path $dest -Force | Out-Null
-          Copy-Item -Path "$src\*" -Destination $dest -Recurse -Force
+          if (Test-Path $env:IIS_SITE_PATH) { Remove-Item -Recurse -Force $env:IIS_SITE_PATH }
+          New-Item -ItemType Directory -Path $env:IIS_SITE_PATH -Force | Out-Null
+          Copy-Item -Path "$env:DEPLOY_PATH\frontend\dist\frontend\*" -Destination $env:IIS_SITE_PATH -Recurse -Force
 
           if (-not (Test-Path "IIS:\AppPools\$env:IIS_APPPOOL")) {
               Write-Host "[INFO] Creating App Pool: $env:IIS_APPPOOL ..."
@@ -34,14 +28,24 @@ jobs:
               Set-ItemProperty "IIS:\AppPools\$env:IIS_APPPOOL" -Name processModel.identityType -Value "ApplicationPoolIdentity"
           }
 
-          Write-Host "[INFO] Assigning App Pool to site..."
-          Set-ItemProperty "IIS:\Sites\$env:IIS_SITE" -Name applicationPool -Value $env:IIS_APPPOOL
+          if (-not (Test-Path "IIS:\Sites\JuiceShop")) {
+              Write-Host "[INFO] Creating IIS site: JuiceShop ..."
+              New-Website -Name "JuiceShop" -Port 8080 -PhysicalPath $env:IIS_SITE_PATH -ApplicationPool $env:IIS_APPPOOL
+          } else {
+              Write-Host "[INFO] Assigning App Pool to existing IIS site ..."
+              Set-ItemProperty "IIS:\Sites\JuiceShop" -Name applicationPool -Value $env:IIS_APPPOOL
+          }
+
           Restart-WebAppPool -Name $env:IIS_APPPOOL
           Write-Host "✅ Frontend deployed to IIS"
 
       # 2️⃣ Deploy Backend Node.js via NSSM
       - name: Deploy Backend Node.js Service via NSSM
         shell: powershell
+        env:
+          DEPLOY_PATH: C:\SSDLC\Nexus_Unzips
+          NODE_PATH: C:\Program Files\nodejs\node.exe
+          NSSM_PATH: C:\SSDLC\nssm-2.24\nssm-2.24\win64\nssm.exe
         run: |
           $serviceName = "JuiceShopServer"
           $nodeExe = $env:NODE_PATH
