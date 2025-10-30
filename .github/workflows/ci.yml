@@ -1,4 +1,4 @@
-name: Juice Shop Trial Deployment (Frontend IIS + Backend Node.js)
+name: Juice Shop Manual Deployment (Frontend IIS + Backend Node.js)
 
 on:
   workflow_dispatch:  # Manual trigger
@@ -8,11 +8,12 @@ jobs:
     runs-on: self-hosted
 
     env:
-      DEPLOY_PATH: C:\\SSDLC\\Nexus_Unzips_backup
+      DEPLOY_PATH: C:\SSDLC\Nexus_Unzips_backup
       IIS_SITE: JuiceShop
       IIS_APPPOOL: JuiceShopAppPool
-      NODE_PATH: "C:\\Program Files\\nodejs\\node.exe"
-      NSSM_PATH: "C:\\SSDLC\\nssm-2.24\\nssm-2.24\\win64\\nssm.exe"
+      NODE_PATH: "C:\Program Files\nodejs\node.exe"
+      NSSM_EXE: "C:\SSDLC\nssm-2.24\nssm-2.24\win64\nssm.exe"
+      NODE_MODULES_PATH: "C:\SSDLC\Nexus_Unzips_backup\i18n"  # i18n module path
 
     steps:
       # 1️⃣ Deploy Frontend to IIS
@@ -24,10 +25,7 @@ jobs:
           $src = Join-Path $env:DEPLOY_PATH "frontend\dist\frontend"
           $dest = "C:\inetpub\wwwroot\$env:IIS_SITE"
 
-          if (Test-Path $dest) {
-              Write-Host "[INFO] Clearing existing files..."
-              Remove-Item -Recurse -Force $dest
-          }
+          if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
           New-Item -ItemType Directory -Path $dest -Force | Out-Null
           Copy-Item -Path "$src\*" -Destination $dest -Recurse -Force
 
@@ -37,13 +35,8 @@ jobs:
               Set-ItemProperty "IIS:\AppPools\$env:IIS_APPPOOL" -Name processModel.identityType -Value "ApplicationPoolIdentity"
           }
 
-          Write-Host "[INFO] Assigning App Pool to IIS site..."
-          if (-not (Test-Path "IIS:\Sites\$env:IIS_SITE")) {
-              New-Website -Name $env:IIS_SITE -Port 8080 -PhysicalPath $dest -ApplicationPool $env:IIS_APPPOOL
-          } else {
-              Set-ItemProperty "IIS:\Sites\$env:IIS_SITE" -Name applicationPool -Value $env:IIS_APPPOOL
-          }
-
+          Write-Host "[INFO] Assigning App Pool to site..."
+          Set-ItemProperty "IIS:\Sites\$env:IIS_SITE" -Name applicationPool -Value $env:IIS_APPPOOL
           Restart-WebAppPool -Name $env:IIS_APPPOOL
           Write-Host "✅ Frontend deployed to IIS"
 
@@ -54,7 +47,8 @@ jobs:
           $serviceName = "JuiceShopServer"
           $nodeExe = $env:NODE_PATH
           $serverJs = Join-Path $env:DEPLOY_PATH "build\server.js"
-          $nssmExe = $env:NSSM_PATH
+          $nssmExe = $env:NSSM_EXE
+          $nodeModulesPath = $env:NODE_MODULES_PATH
 
           if (-not (Get-Service -Name $serviceName -ErrorAction SilentlyContinue)) {
               Write-Host "[INFO] Installing Node.js backend service via NSSM..."
@@ -62,6 +56,7 @@ jobs:
               & $nssmExe set $serviceName AppDirectory (Join-Path $env:DEPLOY_PATH "build")
               & $nssmExe set $serviceName AppStdout (Join-Path $env:DEPLOY_PATH "build\server-out.log")
               & $nssmExe set $serviceName AppStderr (Join-Path $env:DEPLOY_PATH "build\server-err.log")
+              & $nssmExe set $serviceName Environment "NODE_PATH=$nodeModulesPath"
           }
 
           $svc = Get-Service -Name $serviceName
@@ -71,4 +66,4 @@ jobs:
               Start-Service $serviceName
           }
 
-          Write-Host "✅ Backend Node.js service deployed via NSSM"
+          Write-Host "✅ Backend Node.js service deployed via NSSM with NODE_PATH set"
