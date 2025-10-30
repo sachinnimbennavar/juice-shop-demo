@@ -1,16 +1,10 @@
-name: Juice Shop CI/CD Full Pipeline (Build → Nexus → IIS + Node)
+name: Juice Shop Deployment Only
 
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
   workflow_dispatch:
 
 jobs:
-  build-deploy:
+  deploy-only:
     runs-on: self-hosted
 
     env:
@@ -19,90 +13,75 @@ jobs:
       IIS_APPPOOL: "JuiceShopAppPool"
       NODE_EXE: "C:\\Program Files\\nodejs\\node.exe"
       NSSM_EXE: "C:\\SSDLC\\nssm-2.24\\nssm-2.24\\win64\\nssm.exe"
-      ARTIFACT_DIR: "C:\\SSDLC\\Artifacts"
-      ARTIFACT_NAME: "juice-shop-artifact.zip"
+      ARTIFACT_DIR: "C:\\SSDLC\\ci-artifacts"
+      ARTIFACT_NAME: "full-repo.zip"
 
     steps:
-      # 1️⃣ Checkout repository (shallow for speed)
-      - name: Checkout repository
-        uses: actions/checkout@v3
-        with:
-          fetch-depth: 1
-
-      # 2️⃣ Set Node memory
-      - name: Set Node memory
-        run: set NODE_OPTIONS=--max_old_space_size=4096
-
-      # 3️⃣ Cache frontend dependencies & Angular build
-      - name: Cache frontend
-        uses: actions/cache@v3
-        with:
-          path: |
-            frontend/node_modules
-            frontend/dist
-            frontend/.angular
-          key: ${{ runner.os }}-frontend-${{ hashFiles('frontend/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-frontend-
-
-      # 4️⃣ Cache server dependencies
-      - name: Cache server
-        uses: actions/cache@v3
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-server-${{ hashFiles('package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-server-
-
-      # 5️⃣ Install frontend dependencies
-      - name: Install frontend dependencies
-        run: |
-          cd frontend
-          npm install --legacy-peer-deps --prefer-offline --no-audit
-          cd ..
-
-      # 6️⃣ Build frontend
-      - name: Build frontend
-        run: |
-          cd frontend
-          npm run build -- --configuration production --watch=false --verbose
-          cd ..
-
-      # 7️⃣ Install backend dependencies
-      - name: Install backend dependencies
-        run: npm install --prefer-offline --no-audit
-
-      # 8️⃣ Build backend
-      - name: Build backend
-        run: npm run build:server
-
-      # 9️⃣ Package and upload artifact to Nexus
-      - name: Package and upload artifact
+      # 1️⃣ Prepare deployment artifact
+      - name: Prepare deployment artifact
         shell: powershell
         run: |
-          $artifactDir = $env:ARTIFACT_DIR
-          $artifactZip = Join-Path $artifactDir $env:ARTIFACT_NAME
-          if (!(Test-Path $artifactDir)) { New-Item -ItemType Directory -Path $artifactDir | Out-Null }
+          Write-Host "[INFO] Preparing deployment artifact..."
+          if (Test-Path $env:ARTIFACT_DIR) { Remove-Item -Recurse -Force $env:ARTIFACT_DIR }
+          New-Item -ItemType Directory -Path $env:ARTIFACT_DIR | Out-Null
 
+          $artifactZip = Join-Path $env:ARTIFACT_DIR $env:ARTIFACT_NAME
           Compress-Archive -Path `
             "frontend\dist\frontend", `
             "build", `
             "node_modules", `
             "package.json", `
-            "server.js" `
+            "web.config" `
             -DestinationPath $artifactZip -Force
-
           Write-Host "✅ Artifact packaged at: $artifactZip"
-          # (Optional) Upload to Nexus logic can be added here if needed.
 
-      # 🔟 Deploy Frontend to IIS
+      # 2️⃣ Upload artifact to Nexus
+      - name: Upload artifact to Nexus
+        shell: powershell
+        env:
+          NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+        run: |
+          $artifactZip = Join-Path $env:ARTIFACT_DIR $env:ARTIFACT_NAME
+          $version = (Get-Date -Format "yyyyMMddHHmmss")
+          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
+          $headers = @{ Authorization = "Basic $base64Auth" }
+
+          $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/$version/$env:ARTIFACT_NAME"
+          Write-Host "[INFO] Uploading $artifactZip to Nexus → $serverUrl"
+          Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $artifactZip -Headers $headers -ContentType "application/zip"
+          Write-Host "✅ Artifact uploaded successfully"
+
+      # 3️⃣ Download & extract artifact for deployment
+      - name: Juice Shop Deployment
+        shell: powershell
+        run: |
+          Write-Host "[INFO] Starting deployment..."
+          if (Test-Path $env:DEPLOY_PATH) { Remove-Item -Recurse -Force $env:DEPLOY_PATH }
+          New-Item -ItemType Directory -Path $env:DEPLOY_PATH | Out-Null
+
+          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
+          $headers = @{ Authorization = "Basic $base64Auth" }
+
+          $apiUrl = "http://127.0.0.1:8081/service/rest/v1/search?repository=JuiceShopMavenDemo&group=com.example.juiceshop&name=full-repo"
+          $response = Invoke-RestMethod -Uri $apiUrl -Headers $headers -Method Get
+          $latest = $response.items | Sort-Object { $_.version } -Descending | Select-Object -First 1
+          $latestVersion = $latest.version
+          $zipDownloadUrl = $latest.assets[0].downloadUrl
+
+          $zipFilePath = Join-Path $env:DEPLOY_PATH "full-repo-$latestVersion.zip"
+          Invoke-WebRequest -Uri $zipDownloadUrl -OutFile $zipFilePath -Headers $headers
+          Expand-Archive -Path $zipFilePath -DestinationPath $env:DEPLOY_PATH -Force
+          Write-Host "✅ Artifact extracted to $env:DEPLOY_PATH"
+
+      # 4️⃣ Deploy frontend to IIS
       - name: Deploy Frontend to IIS
         shell: powershell
         run: |
           Import-Module WebAdministration
           $src = Join-Path $env:DEPLOY_PATH "frontend\dist\frontend"
           $dest = "C:\\inetpub\\wwwroot\\$env:IIS_SITE"
-
           if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
           New-Item -ItemType Directory -Path $dest -Force | Out-Null
           Copy-Item -Path "$src\*" -Destination $dest -Recurse -Force
@@ -111,17 +90,17 @@ jobs:
               New-WebAppPool -Name $env:IIS_APPPOOL | Out-Null
               Set-ItemProperty "IIS:\AppPools\$env:IIS_APPPOOL" -Name processModel.identityType -Value "ApplicationPoolIdentity"
           }
+
           if (-not (Test-Path "IIS:\Sites\$env:IIS_SITE")) {
               New-Website -Name $env:IIS_SITE -Port 8080 -PhysicalPath $dest -ApplicationPool $env:IIS_APPPOOL
           } else {
               Set-ItemProperty "IIS:\Sites\$env:IIS_SITE" -Name applicationPool -Value $env:IIS_APPPOOL
           }
-
           Restart-WebAppPool -Name $env:IIS_APPPOOL
-          Write-Host "✅ Frontend deployed successfully to IIS"
+          Write-Host "✅ Frontend deployed to IIS"
 
-      # 1️⃣1️⃣ Deploy Backend (Node.js) via NSSM
-      - name: Deploy Backend via NSSM
+      # 5️⃣ Deploy backend Node.js via NSSM
+      - name: Deploy Backend Node.js
         shell: powershell
         run: |
           $serviceName = "JuiceShopServer"
@@ -137,12 +116,5 @@ jobs:
           }
 
           $svc = Get-Service -Name $serviceName
-          if ($svc.Status -eq "Running") {
-              Restart-Service $serviceName -Force
-              Write-Host "♻️ Backend service restarted successfully"
-          } else {
-              Start-Service $serviceName
-              Write-Host "🚀 Backend service started successfully"
-          }
-
-          Write-Host "✅ Deployment Complete!"
+          if ($svc.Status -eq "Running") { Restart-Service $serviceName -Force } else { Start-Service $serviceName }
+          Write-Host "✅ Backend Node.js service started via NSSM"
