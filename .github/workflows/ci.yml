@@ -15,13 +15,14 @@ jobs:
       NSSM_EXE: "C:\\SSDLC\\nssm-2.24\\nssm-2.24\\win64\\nssm.exe"
       ARTIFACT_DIR: "C:\\SSDLC\\ci-artifacts"
       ARTIFACT_NAME: "full-repo.zip"
+      SEVEN_ZIP_EXE: "C:\\Program Files\\7-Zip\\7z.exe"  # Path to 7z.exe
 
     steps:
-      # 1️⃣ Prepare deployment artifact
+      # 1️⃣ Prepare deployment artifact using 7-Zip
       - name: Prepare deployment artifact
         shell: powershell
         run: |
-          Write-Host "[INFO] Preparing deployment artifact..."
+          Write-Host "[INFO] Preparing deployment artifact with 7-Zip..."
           if (Test-Path $env:ARTIFACT_DIR) { Remove-Item -Recurse -Force $env:ARTIFACT_DIR }
           New-Item -ItemType Directory -Path $env:ARTIFACT_DIR | Out-Null
 
@@ -34,10 +35,12 @@ jobs:
               "node_modules",
               "package.json"
           )
-
           if (Test-Path "web.config") { $pathsToZip += "web.config" }
 
-          Compress-Archive -Path $pathsToZip -DestinationPath $artifactZip -Force
+          # Convert array to string for 7-Zip CLI
+          $pathsString = $pathsToZip -join " "
+
+          & "$env:SEVEN_ZIP_EXE" a -tzip $artifactZip $pathsString -mx=9
           Write-Host "✅ Artifact packaged at: $artifactZip"
 
       # 2️⃣ Upload artifact to Nexus
