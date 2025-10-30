@@ -26,7 +26,8 @@ jobs:
           if (Test-Path $env:ARTIFACT_DIR) { Remove-Item -Recurse -Force $env:ARTIFACT_DIR }
           New-Item -ItemType Directory -Path $env:ARTIFACT_DIR | Out-Null
 
-          $artifactZip = Join-Path $env:ARTIFACT_DIR $env:ARTIFACT_NAME
+          $version = (Get-Date -Format "yyyyMMddHHmmss")
+          $artifactZip = Join-Path $env:ARTIFACT_DIR "full-repo-$version.zip"
 
           # Only include paths that exist
           $pathsToZip = @()
@@ -43,47 +44,33 @@ jobs:
               Write-Host "✅ Artifact packaged at: $artifactZip"
           }
 
-      # 2️⃣ Upload artifact to Nexus
-      - name: Upload artifact to Nexus
+      # 2️⃣ Upload artifact to Nexus Maven repository
+      - name: Upload artifact to Nexus (Maven)
         shell: powershell
         env:
           NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
-          $artifactZip = Join-Path $env:ARTIFACT_DIR $env:ARTIFACT_NAME
           $version = (Get-Date -Format "yyyyMMddHHmmss")
-          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
-          $headers = @{ Authorization = "Basic $base64Auth" }
+          $artifactZip = Join-Path $env:ARTIFACT_DIR "full-repo-$version.zip"
 
-          $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/$version/$env:ARTIFACT_NAME"
-          Write-Host "[INFO] Uploading $artifactZip to Nexus → $serverUrl"
-          Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $artifactZip -Headers $headers -ContentType "application/zip"
-          Write-Host "✅ Artifact uploaded successfully"
+          Write-Host "[INFO] Uploading $artifactZip to Nexus Maven repository..."
 
-      # 3️⃣ Download & extract artifact for deployment
-      - name: Juice Shop Deployment
-        shell: powershell
-        run: |
-          Write-Host "[INFO] Starting deployment..."
-          if (Test-Path $env:DEPLOY_PATH) { Remove-Item -Recurse -Force $env:DEPLOY_PATH }
-          New-Item -ItemType Directory -Path $env:DEPLOY_PATH | Out-Null
+          & mvn deploy:deploy-file `
+              -DgroupId=com.example.juiceshop `
+              -DartifactId=full-repo `
+              -Dversion=$version `
+              -Dpackaging=zip `
+              -Dfile=$artifactZip `
+              -DrepositoryId=juiceshop-repo `
+              -Durl=$env:NEXUS_URL `
+              -Dusername=$env:NEXUS_USERNAME `
+              -Dpassword=$env:NEXUS_PASSWORD
 
-          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
-          $headers = @{ Authorization = "Basic $base64Auth" }
+          Write-Host "✅ Artifact uploaded successfully to Maven repo."
 
-          $apiUrl = "http://127.0.0.1:8081/service/rest/v1/search?repository=JuiceShopMavenDemo&group=com.example.juiceshop&name=full-repo"
-          $response = Invoke-RestMethod -Uri $apiUrl -Headers $headers -Method Get
-          $latest = $response.items | Sort-Object { $_.version } -Descending | Select-Object -First 1
-          $latestVersion = $latest.version
-          $zipDownloadUrl = $latest.assets[0].downloadUrl
-
-          $zipFilePath = Join-Path $env:DEPLOY_PATH "full-repo-$latestVersion.zip"
-          Invoke-WebRequest -Uri $zipDownloadUrl -OutFile $zipFilePath -Headers $headers
-          Expand-Archive -Path $zipFilePath -DestinationPath $env:DEPLOY_PATH -Force
-          Write-Host "✅ Artifact extracted to $env:DEPLOY_PATH"
-
-      # 4️⃣ Deploy frontend to IIS
+      # 3️⃣ Deploy frontend to IIS
       - name: Deploy Frontend to IIS
         shell: powershell
         run: |
@@ -107,7 +94,7 @@ jobs:
           Restart-WebAppPool -Name $env:IIS_APPPOOL
           Write-Host "✅ Frontend deployed to IIS"
 
-      # 5️⃣ Deploy backend Node.js via NSSM
+      # 4️⃣ Deploy backend Node.js via NSSM
       - name: Deploy Backend Node.js
         shell: powershell
         run: |
