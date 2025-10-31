@@ -1,141 +1,145 @@
-name: Juice Shop Deployment Pipeline (Artifact → IIS)
+name: Juice Shop CI/CD Pipeline
 
 on:
-  workflow_dispatch:  # Manual trigger
+  workflow_dispatch:
 
 jobs:
-  deploy-juice-shop:
+  build-and-deploy:
     runs-on: self-hosted
+    env:
+      NODE_OPTIONS: --max_old_space_size=4096
+      NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
+      DEPLOY_DIR: C:\SSDLC\Nexus_Unzips
+      IIS_SITE: "JuiceShop"               # 🔹 Update this with your IIS site name
+      IIS_APPPOOL: "JuiceShopAppPool"     # 🔹 Update this with your App Pool name
 
     steps:
-      # 1️⃣ Checkout repository
+      # 1️⃣ Checkout repository (shallow for speed)
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 1
 
-      # 2️⃣ Prepare deployment artifact (excluding node_modules)
-      - name: Prepare deployment artifact
-        shell: powershell
+      # 2️⃣ Cache frontend dependencies & Angular build
+      - name: Cache frontend
+        uses: actions/cache@v3
+        with:
+          path: |
+            frontend/node_modules
+            frontend/dist
+            frontend/.angular
+          key: ${{ runner.os }}-frontend-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-frontend-
+
+      # 3️⃣ Cache backend dependencies
+      - name: Cache server
+        uses: actions/cache@v3
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-server-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-server-
+
+      # 4️⃣ Install frontend dependencies
+      - name: Install frontend dependencies
         run: |
-          Write-Host "[INFO] Preparing deployment artifact..."
-          $artifactFolder = "build_output"
-          if (Test-Path $artifactFolder) { 
-            Remove-Item -Recurse -Force $artifactFolder 
-          }
-          New-Item -ItemType Directory -Path $artifactFolder | Out-Null
+          cd frontend
+          npm install --legacy-peer-deps --prefer-offline --no-audit
+          cd ..
 
-          $filesToInclude = @(
-            "frontend/dist/frontend",
-            "server.js",
-            "routes",
-            "data",
-            "config",
-            "package.json",
-            "web.config"
-          )
+      # 5️⃣ Build frontend (Angular)
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm run build -- --configuration production --watch=false --verbose
+          cd ..
 
-          foreach ($item in $filesToInclude) {
-              if (Test-Path $item) {
-                  $dest = Join-Path $artifactFolder $item
-                  $destDir = Split-Path $dest
-                  if (!(Test-Path $destDir)) { 
-                    New-Item -ItemType Directory -Path $destDir -Force | Out-Null 
-                  }
-                  Copy-Item -Path $item -Destination $dest -Recurse -Force
-              } else {
-                  Write-Host "[WARN] Skipping missing path: $item"
-              }
-          }
+      # 6️⃣ Install backend dependencies
+      - name: Install server dependencies
+        run: npm install --prefer-offline --no-audit
 
-          Write-Host "[INFO] Artifact ready at $artifactFolder"
+      # 7️⃣ Build backend
+      - name: Build backend
+        run: npm run build:server
 
-      # 3️⃣ Upload artifact to Nexus (your original version)
+      # 8️⃣ Prepare & Upload artifact to Nexus
       - name: Upload artifact to Nexus
         shell: powershell
         env:
-          NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
+          Write-Host "[INFO] Preparing artifact for Nexus upload..."
           $version = (Get-Date -Format "yyyyMMddHHmmss")
           $serverZip = "full-repo-$version.zip"
-          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
-          $headers = @{ Authorization = "Basic $base64Auth" }
-          
-          if (Test-Path $serverZip) { Remove-Item $serverZip -Force }
-          Compress-Archive -Path "build_output/*" -DestinationPath $serverZip -Force
+          $artifactDir = "build_output"
+
+          # Prepare build_output directory
+          if (Test-Path $artifactDir) { Remove-Item $artifactDir -Recurse -Force }
+          New-Item -Path $artifactDir -ItemType Directory | Out-Null
+
+          # Copy built frontend and backend (excluding node_modules)
+          Copy-Item -Path "frontend/dist" -Destination "$artifactDir/frontend" -Recurse -Force
+          Copy-Item -Path "server.js" -Destination $artifactDir -Force
+          Copy-Item -Path "package.json" -Destination $artifactDir -Force
+
+          # Compress and upload
+          Compress-Archive -Path "$artifactDir/*" -DestinationPath $serverZip -Force
 
           $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/$version/$serverZip"
           Write-Host "[INFO] Uploading $serverZip to Nexus → $serverUrl"
+          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
+          $headers = @{ Authorization = "Basic $base64Auth" }
           Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $serverZip -Headers $headers -ContentType "application/zip"
           Write-Host "✅ Artifact uploaded successfully."
 
-      # 4️⃣ Download & unzip latest artifact from Nexus
-      - name: Download & unzip latest artifact from Nexus
+      # 9️⃣ Deploy artifact to IIS
+      - name: Deploy artifact to IIS
         shell: powershell
         env:
-          NEXUS_URL: http://127.0.0.1:8081
-          NEXUS_REPO: JuiceShopMavenDemo
-          DEPLOY_PATH: C:\SSDLC\Nexus_Unzips
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
-        run: |
-          Write-Host "[INFO] Starting artifact download..."
-          if (Test-Path $env:DEPLOY_PATH) {
-              Write-Host "[INFO] Clearing existing files from $env:DEPLOY_PATH ..."
-              Remove-Item -Path "$env:DEPLOY_PATH\*" -Recurse -Force
-          } else {
-              New-Item -ItemType Directory -Path $env:DEPLOY_PATH -Force | Out-Null
-          }
-
-          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
-          $headers = @{ Authorization = "Basic $base64Auth" }
-          $apiUrl = "${env:NEXUS_URL}/service/rest/v1/search?repository=${env:NEXUS_REPO}&group=com.example.juiceshop&name=full-repo"
-
-          $response = Invoke-RestMethod -Uri $apiUrl -Headers $headers -Method Get
-          if ($null -eq $response.items -or $response.items.Count -eq 0) {
-              Write-Host "[ERROR] No full-repo versions found in Nexus!"
-              exit 1
-          }
-          $latest = $response.items | Sort-Object { $_.version } -Descending | Select-Object -First 1
-          $latestVersion = $latest.version
-          $zipDownloadUrl = $latest.assets[0].downloadUrl
-          Write-Host "[INFO] Latest version: $latestVersion"
-          Write-Host "[INFO] Download URL: $zipDownloadUrl"
-
-          $zipFilePath = Join-Path $env:DEPLOY_PATH "full-repo-$latestVersion.zip"
-          Write-Host "[INFO] Downloading ZIP to $zipFilePath ..."
-          Invoke-WebRequest -Uri $zipDownloadUrl -OutFile $zipFilePath -Headers $headers
-          Expand-Archive -Path $zipFilePath -DestinationPath $env:DEPLOY_PATH -Force
-          Write-Host "✅ Artifact downloaded and extracted successfully."
-
-      # 5️⃣ Deploy to IIS
-      - name: 🚀 Deploy to IIS (Frontend + Backend)
-        shell: powershell
-        env:
-          DEPLOY_SOURCE: C:\SSDLC\Nexus_Unzips
-          DEPLOY_TARGET: C:\inetpub\wwwroot\JuiceShop
-          IIS_APPPOOL: JuiceShopAppPool
-          IIS_SITE: "Default Web Site"
         run: |
           Import-Module WebAdministration
           Write-Host "[INFO] Deploying artifact to IIS..."
 
-          if (Test-Path $env:DEPLOY_TARGET) {
-              Write-Host "[INFO] Clearing existing files..."
-              Remove-Item -Path "$env:DEPLOY_TARGET\*" -Recurse -Force
+          # 1️⃣ Clear existing deployment directory
+          if (Test-Path $env:DEPLOY_DIR) {
+              Write-Host "[INFO] Clearing old files from $env:DEPLOY_DIR..."
+              Remove-Item -Path "$env:DEPLOY_DIR\*" -Recurse -Force -ErrorAction SilentlyContinue
           } else {
-              New-Item -ItemType Directory -Path $env:DEPLOY_TARGET -Force | Out-Null
+              Write-Host "[INFO] Creating deployment directory: $env:DEPLOY_DIR"
+              New-Item -Path $env:DEPLOY_DIR -ItemType Directory | Out-Null
           }
 
-          Copy-Item -Path "$env:DEPLOY_SOURCE\*" -Destination $env:DEPLOY_TARGET -Recurse -Force
+          # 2️⃣ Find latest artifact version on Nexus
+          $latestVersion = (Invoke-RestMethod -Uri "$env:NEXUS_URL/com/example/juiceshop/full-repo/" -UseBasicParsing | Select-String -Pattern "\d{14}" -AllMatches).Matches.Value | Sort-Object | Select-Object -Last 1
+          if (-not $latestVersion) { throw "❌ No artifact version found on Nexus!" }
 
-          if (-not (Test-Path "IIS:\AppPools\$env:IIS_APPPOOL")) {
-              Write-Host "[INFO] Creating App Pool: $env:IIS_APPPOOL ..."
-              New-WebAppPool -Name $env:IIS_APPPOOL | Out-Null
-              Set-ItemProperty "IIS:\AppPools\$env:IIS_APPPOOL" -Name processModel.identityType -Value "ApplicationPoolIdentity"
+          # 3️⃣ Download artifact
+          $artifactUrl = "$env:NEXUS_URL/com/example/juiceshop/full-repo/$latestVersion/full-repo-$latestVersion.zip"
+          $downloadPath = "$env:DEPLOY_DIR\artifact.zip"
+          Write-Host "[INFO] Downloading artifact → $artifactUrl"
+
+          $base64Auth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
+          $headers = @{ Authorization = "Basic $base64Auth" }
+          Invoke-RestMethod -Uri $artifactUrl -Method Get -Headers $headers -OutFile $downloadPath -ErrorAction Stop
+
+          # 4️⃣ Extract artifact
+          Write-Host "[INFO] Extracting artifact to $env:DEPLOY_DIR..."
+          Expand-Archive -Path $downloadPath -DestinationPath $env:DEPLOY_DIR -Force
+
+          # 5️⃣ Assign App Pool & restart site
+          $sitePath = "IIS:\Sites\$env:IIS_SITE"
+          if (Test-Path $sitePath) {
+              Write-Host "[INFO] Assigning App Pool '$env:IIS_APPPOOL' to site '$env:IIS_SITE'..."
+              Set-ItemProperty $sitePath -Name applicationPool -Value $env:IIS_APPPOOL
+              Write-Host "[INFO] Restarting IIS site..."
+              Stop-WebSite $env:IIS_SITE -ErrorAction SilentlyContinue
+              Start-WebSite $env:IIS_SITE
+              Write-Host "✅ Deployment completed and site restarted successfully."
+          } else {
+              Write-Host "⚠️ IIS site '$env:IIS_SITE' not found. Please verify the site name in IIS Manager."
+              Write-Host "💡 To check: Get-ChildItem IIS:\Sites"
           }
-
-          Write-Host "[INFO] Assigning App Pool to site..."
-          Set-ItemProperty "IIS:\Sites\$env:IIS_SITE" -Name applicationPool -Value $env:IIS_APPPOOL
-          Restart-WebAppPool -Name $env:IIS_APPPOOL
-          Write-Host "✅ IIS Deployment completed successfully!"
