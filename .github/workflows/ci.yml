@@ -68,37 +68,11 @@ jobs:
               Write-Host "[INFO] Skipping frontend build (cached output found)."
           }
 
-      # 6️⃣ Prepare deployment artifact (minimal for manual CLI run)
-      - name: Prepare deployment artifact
-        shell: powershell
-        run: |
-          Write-Host "[INFO] Preparing deployment artifact..."
-          $artifactFolder = "build_output"
-          if (Test-Path $artifactFolder) { Remove-Item -Recurse -Force $artifactFolder }
-          New-Item -ItemType Directory -Path $artifactFolder | Out-Null
-          # Only include files/folders needed to run Juice Shop manually via CLI
-          $filesToInclude = @(
-              "server.js",
-              "package.json",
-              "package-lock.json",
-              "build",
-              "frontend/dist/frontend"
-          )
-          foreach ($item in $filesToInclude) {
-              if (Test-Path $item) {
-                  $dest = Join-Path $artifactFolder $item
-                  $destDir = Split-Path $dest
-                  if (!(Test-Path $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
-                  Copy-Item -Path $item -Destination $dest -Recurse -Force
-              }
-          }
-          Write-Host "[INFO] Artifact ready at $artifactFolder"
-
-      # 7️⃣ Upload artifact to Nexus
-      - name: Upload artifact to Nexus
+      # 6️⃣ Create & Upload Full Repo ZIP to Nexus
+      - name: 📦 Create & Upload Full Repo ZIP to Nexus
         shell: powershell
         env:
-          NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
+          NEXUS_URL: ${{ secrets.NEXUS_URL }}
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
@@ -106,14 +80,54 @@ jobs:
           $serverZip = "full-repo-$version.zip"
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
-          if (Test-Path $serverZip) { Remove-Item $serverZip -Force }
-          Compress-Archive -Path "build_output/*" -DestinationPath $serverZip -Force
-          $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/$version/$serverZip"
-          Write-Host "[INFO] Uploading $serverZip to Nexus → $serverUrl"
-          Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $serverZip -Headers $headers -ContentType "application/zip"
-          Write-Host "✅ Artifact uploaded successfully."
 
-      # 8️⃣ Download & unzip latest artifact from Nexus
+          $itemsInOrder = @(
+              ".dependabot",".github",".gitlab",".well-known",".zap",
+              "build","logs","node_modules","config","data","encryptionkeys",
+              "frontend","ftp","i18n","lib","models","monitoring",
+              "routes","rsn","screenshots","test","uploads","vagrant","views",
+              ".codeclimate.yml",".devcontainer.json",".dockerignore",".eslintrc.js",
+              ".gitignore",".gitlab-ci.yml",".gitpod.yml",".mailmap",".npmrc",
+              "app.json","app.ts","CODE_OF_CONDUCT.md","config.schema.yml","CONTRIBUTING.md",
+              "crowdin.yaml","ctf.key","cypress.config.ts","docker-compose.test.yml","Dockerfile",
+              "Gruntfile.js","HALL_OF_FAME.md","LICENSE","package.json","README.md",
+              "REFERENCES.md","SECURITY.md","server.ts","SOLUTIONS.md","swagger.yml",
+              "threat-model.json","tsconfig.json"
+          )
+
+          if (Test-Path $serverZip) { Remove-Item $serverZip -Force }
+
+          foreach ($item in $itemsInOrder) {
+              if (Test-Path $item) {
+                  if ($item -eq "node_modules") {
+                      $count = (Get-ChildItem node_modules -Recurse | Measure-Object).Count
+                      if ($count -gt 5000) {
+                          Write-Host "⚠️ Skipping node_modules folder to save time (contains $count items)..."
+                          continue
+                      }
+                  }
+                  Write-Host "Adding $item to ZIP..."
+                  Compress-Archive -Path $item -DestinationPath $serverZip -Update
+              } else {
+                  if ($item -in @("build","logs","node_modules","config","data","encryptionkeys")) {
+                      Write-Host "Creating empty folder $item..."
+                      New-Item -ItemType Directory -Path $item
+                      Compress-Archive -Path $item -DestinationPath $serverZip -Update
+                  }
+              }
+          }
+
+          $size = (Get-Item $serverZip).Length
+          Write-Host "[INFO] ZIP file size: $size bytes"
+          if ($size -lt 100000) { exit 1 }
+
+          Write-Host "✅ Full repo ZIP created: $serverZip"
+          $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/$version/$serverZip"
+          Write-Host "⬆️ Uploading to Nexus → $serverUrl"
+          Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $serverZip -Headers $headers -ContentType "application/zip"
+          Write-Host "✅ Full repo uploaded successfully."
+
+      # 7️⃣ Download & unzip latest artifact from Nexus
       - name: Download & unzip latest artifact from Nexus
         shell: powershell
         env:
@@ -148,7 +162,7 @@ jobs:
           Expand-Archive -Path $zipFilePath -DestinationPath $env:DEPLOY_PATH -Force
           Write-Host "✅ Artifact downloaded and extracted successfully."
 
-      # 9️⃣ Deploy to IIS (optional, can skip if only CLI run)
+      # 8️⃣ Deploy to IIS
       - name: 🚀 Deploy to IIS
         shell: powershell
         env:
