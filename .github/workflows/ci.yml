@@ -1,12 +1,12 @@
-name: Juice Shop Full CI/CD Pipeline (Ultra Fast)
+name: Juice Shop Full CI/CD Pipeline (Ultra Fast + ZAP Scan)
 
 on:
   workflow_dispatch:  # Manual trigger only
 
 jobs:
-  build-upload-deploy:
+  build-upload-deploy-scan:
     runs-on: self-hosted
-    timeout-minutes: 120
+    timeout-minutes: 180
 
     steps:
       # 1️⃣ Ultra-Fast Checkout (minimal)
@@ -30,7 +30,7 @@ jobs:
           key: ${{ runner.os }}-juiceshop-${{ hashFiles('package-lock.json', 'frontend/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-juiceshop-
-
+            
       # 3️⃣ Install backend dependencies (only if missing)
       - name: Install backend dependencies (first-time only)
         shell: powershell
@@ -68,11 +68,30 @@ jobs:
               Write-Host "[INFO] Skipping frontend build (cached output found)."
           }
 
-      # 6️⃣ Create & Upload Full Repo ZIP to Nexus
-      - name: 📦 Create & Upload Full Repo ZIP to Nexus
+      # 6️⃣ Prepare deployment artifact
+      - name: Prepare deployment artifact
+        shell: powershell
+        run: |
+          Write-Host "[INFO] Preparing deployment artifact..."
+          $artifactFolder = "build_output"
+          if (Test-Path $artifactFolder) { Remove-Item -Recurse -Force $artifactFolder }
+          New-Item -ItemType Directory -Path $artifactFolder | Out-Null
+          $filesToInclude = @("frontend/dist/frontend","server.js","package.json","web.config")
+          foreach ($item in $filesToInclude) {
+              if (Test-Path $item) {
+                  $dest = Join-Path $artifactFolder $item
+                  $destDir = Split-Path $dest
+                  if (!(Test-Path $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
+                  Copy-Item -Path $item -Destination $dest -Recurse -Force
+              }
+          }
+          Write-Host "[INFO] Artifact ready at $artifactFolder"
+
+      # 7️⃣ Upload artifact to Nexus
+      - name: Upload artifact to Nexus
         shell: powershell
         env:
-          NEXUS_URL: ${{ secrets.NEXUS_URL }}
+          NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
@@ -80,54 +99,14 @@ jobs:
           $serverZip = "full-repo-$version.zip"
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
-
-          $itemsInOrder = @(
-              ".dependabot",".github",".gitlab",".well-known",".zap",
-              "build","logs","node_modules","config","data","encryptionkeys",
-              "frontend","ftp","i18n","lib","models","monitoring",
-              "routes","rsn","screenshots","test","uploads","vagrant","views",
-              ".codeclimate.yml",".devcontainer.json",".dockerignore",".eslintrc.js",
-              ".gitignore",".gitlab-ci.yml",".gitpod.yml",".mailmap",".npmrc",
-              "app.json","app.ts","CODE_OF_CONDUCT.md","config.schema.yml","CONTRIBUTING.md",
-              "crowdin.yaml","ctf.key","cypress.config.ts","docker-compose.test.yml","Dockerfile",
-              "Gruntfile.js","HALL_OF_FAME.md","LICENSE","package.json","README.md",
-              "REFERENCES.md","SECURITY.md","server.ts","SOLUTIONS.md","swagger.yml",
-              "threat-model.json","tsconfig.json"
-          )
-
           if (Test-Path $serverZip) { Remove-Item $serverZip -Force }
-
-          foreach ($item in $itemsInOrder) {
-              if (Test-Path $item) {
-                  if ($item -eq "node_modules") {
-                      $count = (Get-ChildItem node_modules -Recurse | Measure-Object).Count
-                      if ($count -gt 5000) {
-                          Write-Host "⚠️ Skipping node_modules folder to save time (contains $count items)..."
-                          continue
-                      }
-                  }
-                  Write-Host "Adding $item to ZIP..."
-                  Compress-Archive -Path $item -DestinationPath $serverZip -Update
-              } else {
-                  if ($item -in @("build","logs","node_modules","config","data","encryptionkeys")) {
-                      Write-Host "Creating empty folder $item..."
-                      New-Item -ItemType Directory -Path $item
-                      Compress-Archive -Path $item -DestinationPath $serverZip -Update
-                  }
-              }
-          }
-
-          $size = (Get-Item $serverZip).Length
-          Write-Host "[INFO] ZIP file size: $size bytes"
-          if ($size -lt 100000) { exit 1 }
-
-          Write-Host "✅ Full repo ZIP created: $serverZip"
+          Compress-Archive -Path "build_output/*" -DestinationPath $serverZip -Force
           $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/$version/$serverZip"
-          Write-Host "⬆️ Uploading to Nexus → $serverUrl"
+          Write-Host "[INFO] Uploading $serverZip to Nexus → $serverUrl"
           Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $serverZip -Headers $headers -ContentType "application/zip"
-          Write-Host "✅ Full repo uploaded successfully."
+          Write-Host "✅ Artifact uploaded successfully."
 
-      # 7️⃣ Download & unzip latest artifact from Nexus
+      # 8️⃣ Download & unzip latest artifact from Nexus
       - name: Download & unzip latest artifact from Nexus
         shell: powershell
         env:
@@ -162,7 +141,7 @@ jobs:
           Expand-Archive -Path $zipFilePath -DestinationPath $env:DEPLOY_PATH -Force
           Write-Host "✅ Artifact downloaded and extracted successfully."
 
-      # 8️⃣ Deploy to IIS
+      # 9️⃣ Deploy to IIS
       - name: 🚀 Deploy to IIS
         shell: powershell
         env:
@@ -190,3 +169,32 @@ jobs:
           Set-ItemProperty "IIS:\Sites\$env:IIS_SITE" -Name applicationPool -Value $env:IIS_APPPOOL
           Restart-WebAppPool -Name $env:IIS_APPPOOL
           Write-Host "✅ IIS Deployment completed successfully!"
+
+      # 🔟 Run OWASP ZAP Desktop Scan
+      - name: 🛡️ Run OWASP ZAP Scan
+        shell: powershell
+        env:
+          ZAP_PATH: C:\SSDLC\ZAP_2_16_1_windows.exe
+          ZAP_PORT: 8082
+          TARGET_URL: http://localhost:3000
+          ZAP_REPORT_DIR: C:\SSDLC\ZapScan_Reports
+          ZAP_REPORT_HTML: C:\SSDLC\ZapScan_Reports\juice-shop-zap-report.html
+        run: |
+          # Create reports folder if not exists
+          if (-not (Test-Path $env:ZAP_REPORT_DIR)) { New-Item -ItemType Directory -Path $env:ZAP_REPORT_DIR -Force | Out-Null }
+
+          Write-Host "[INFO] Starting OWASP ZAP in daemon mode..."
+          Start-Process -FilePath $env:ZAP_PATH -ArgumentList "-daemon -port $env:ZAP_PORT -newsession $env:ZAP_REPORT_DIR\zap-session.session" -NoNewWindow
+          Write-Host "[INFO] Waiting 20 seconds for ZAP daemon to start..."
+          Start-Sleep -Seconds 20
+
+          Write-Host "[INFO] Running ZAP scan on $env:TARGET_URL ..."
+          & $env:ZAP_PATH -cmd -quickurl $env:TARGET_URL -quickout $env:ZAP_REPORT_HTML
+          Write-Host "✅ ZAP scan completed. Report saved at $env:ZAP_REPORT_HTML"
+
+      # 1️⃣1️⃣ Upload ZAP report
+      - name: Upload ZAP report
+        uses: actions/upload-artifact@v3
+        with:
+          name: zap-report
+          path: C:\SSDLC\ZapScan_Reports\juice-shop-zap-report.html
