@@ -99,6 +99,7 @@ jobs:
           Import-Module WebAdministration
           Write-Host "[INFO] Deploying artifact to IIS..."
 
+          # Prepare target folder
           if (Test-Path $env:DEPLOY_TARGET) {
               Write-Host "[INFO] Clearing existing files..."
               Remove-Item -Path "$env:DEPLOY_TARGET\*" -Recurse -Force
@@ -106,15 +107,25 @@ jobs:
               New-Item -ItemType Directory -Path $env:DEPLOY_TARGET -Force | Out-Null
           }
 
+          # Copy files
           Copy-Item -Path "$env:DEPLOY_SOURCE\*" -Destination $env:DEPLOY_TARGET -Recurse -Force
 
+          # Ensure App Pool exists
           if (-not (Test-Path "IIS:\AppPools\$env:IIS_APPPOOL")) {
               Write-Host "[INFO] Creating App Pool: $env:IIS_APPPOOL ..."
               New-WebAppPool -Name $env:IIS_APPPOOL | Out-Null
               Set-ItemProperty "IIS:\AppPools\$env:IIS_APPPOOL" -Name processModel.identityType -Value "ApplicationPoolIdentity"
           }
 
+          # Ensure IIS site exists
+          if (-not (Test-Path "IIS:\Sites\$env:IIS_SITE")) {
+              Write-Host "[INFO] IIS site '$env:IIS_SITE' not found. Creating site..."
+              New-Website -Name $env:IIS_SITE -PhysicalPath $env:DEPLOY_TARGET -Port 80 -Force | Out-Null
+          }
+
+          # Assign App Pool to site
           Write-Host "[INFO] Assigning App Pool to site..."
           Set-ItemProperty "IIS:\Sites\$env:IIS_SITE" -Name applicationPool -Value $env:IIS_APPPOOL
           Restart-WebAppPool -Name $env:IIS_APPPOOL
+
           Write-Host "✅ IIS Deployment completed successfully!"
