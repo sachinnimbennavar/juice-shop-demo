@@ -1,10 +1,10 @@
-name: Juice Shop Full CI/CD Pipeline (Ultra Fast + ZAP Scan)
+name: Juice Shop Full CI/CD Pipeline (Ultra Fast + OWASP ZAP Scan)
 
 on:
   workflow_dispatch:  # Manual trigger only
 
 jobs:
-  build-upload-deploy-scan:
+  build-upload-deploy:
     runs-on: self-hosted
     timeout-minutes: 180
 
@@ -19,9 +19,9 @@ jobs:
           clean: false
           persist-credentials: false
 
-      # 2️⃣ Cache frontend + backend dependencies & frontend build
+      # 2️⃣ Cache dependencies + frontend build
       - name: Cache dependencies + frontend build
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             node_modules
@@ -36,7 +36,7 @@ jobs:
         shell: powershell
         run: |
           if (-Not (Test-Path "node_modules")) {
-              Write-Host "[INFO] Installing backend dependencies for first-time setup..."
+              Write-Host "[INFO] Installing backend dependencies..."
               npm install --prefer-offline --no-audit
           } else {
               Write-Host "[INFO] Skipping backend install (already present)."
@@ -47,7 +47,7 @@ jobs:
         shell: powershell
         run: |
           if (-Not (Test-Path "frontend/node_modules")) {
-              Write-Host "[INFO] Installing frontend dependencies for first-time setup..."
+              Write-Host "[INFO] Installing frontend dependencies..."
               cd frontend
               npm install --legacy-peer-deps --prefer-offline --no-audit
               cd ..
@@ -60,7 +60,7 @@ jobs:
         shell: powershell
         run: |
           if (-Not (Test-Path "frontend/dist/frontend")) {
-              Write-Host "[INFO] Building Angular frontend for first-time setup..."
+              Write-Host "[INFO] Building Angular frontend..."
               cd frontend
               npm run build -- --configuration production --watch=false
               cd ..
@@ -118,7 +118,7 @@ jobs:
         run: |
           Write-Host "[INFO] Starting artifact download..."
           if (Test-Path $env:DEPLOY_PATH) {
-              Write-Host "[INFO] Clearing old files from $env:DEPLOY_PATH..."
+              Write-Host "[INFO] Clearing old files..."
               Remove-Item -Path "$env:DEPLOY_PATH\*" -Recurse -Force
           } else {
               New-Item -ItemType Directory -Path $env:DEPLOY_PATH -Force | Out-Null
@@ -136,10 +136,10 @@ jobs:
           $zipDownloadUrl = $latest.assets[0].downloadUrl
           Write-Host "[INFO] Latest version: $latestVersion"
           $zipFilePath = Join-Path $env:DEPLOY_PATH "full-repo-$latestVersion.zip"
-          Write-Host "[INFO] Downloading ZIP to $zipFilePath ..."
+          Write-Host "[INFO] Downloading ZIP → $zipFilePath ..."
           Invoke-WebRequest -Uri $zipDownloadUrl -OutFile $zipFilePath -Headers $headers
           Expand-Archive -Path $zipFilePath -DestinationPath $env:DEPLOY_PATH -Force
-          Write-Host "✅ Artifact downloaded and extracted successfully."
+          Write-Host "✅ Artifact downloaded & extracted successfully."
 
       # 9️⃣ Deploy to IIS
       - name: 🚀 Deploy to IIS
@@ -170,40 +170,29 @@ jobs:
           Restart-WebAppPool -Name $env:IIS_APPPOOL
           Write-Host "✅ IIS Deployment completed successfully!"
 
-      # 🔟 Start Node.js server for ZAP scan
-      - name: Start Node.js server for ZAP
-        shell: powershell
-        run: |
-          Write-Host "[INFO] Starting Juice Shop Node.js server..."
-          cd C:\SSDLC\Nexus_Unzips
-          Start-Process "npm" -ArgumentList "start" -NoNewWindow
-          Write-Host "[INFO] Waiting 20 seconds for server to start..."
-          Start-Sleep -Seconds 20
-
-      # 1️⃣1️⃣ Run OWASP ZAP Desktop Scan
-      - name: 🛡️ Run OWASP ZAP Scan
+      # 🔟 Run OWASP ZAP scan on Juice Shop
+      - name: ⚡ Run OWASP ZAP Scan
         shell: powershell
         env:
           ZAP_PATH: C:\SSDLC\ZAP_2_16_1_windows.exe
-          ZAP_PORT: 8082
-          TARGET_URL: http://localhost:3000
-          ZAP_REPORT_DIR: C:\SSDLC\ZapScan_Reports
-          ZAP_REPORT_HTML: C:\SSDLC\ZapScan_Reports\juice-shop-zap-report.html
+          ZAP_REPORT_PATH: C:\SSDLC\ZapScan_Reports
         run: |
-          if (-not (Test-Path $env:ZAP_REPORT_DIR)) { New-Item -ItemType Directory -Path $env:ZAP_REPORT_DIR -Force | Out-Null }
-
-          Write-Host "[INFO] Starting OWASP ZAP in daemon mode..."
-          Start-Process -FilePath $env:ZAP_PATH -ArgumentList "-daemon -port $env:ZAP_PORT -newsession $env:ZAP_REPORT_DIR\zap-session.session" -NoNewWindow
-          Write-Host "[INFO] Waiting 20 seconds for ZAP daemon to start..."
+          Write-Host "[INFO] Starting Juice Shop Node.js server..."
+          cd C:\SSDLC\Nexus_Unzips
+          $env:PATH += ";C:\Program Files\nodejs"
+          Start-Process "cmd.exe" -ArgumentList "/c npm start" -NoNewWindow
           Start-Sleep -Seconds 20
 
-          Write-Host "[INFO] Running ZAP scan on $env:TARGET_URL ..."
-          & $env:ZAP_PATH -cmd -quickurl $env:TARGET_URL -quickout $env:ZAP_REPORT_HTML
-          Write-Host "✅ ZAP scan completed. Report saved at $env:ZAP_REPORT_HTML"
+          Write-Host "[INFO] Running OWASP ZAP scan..."
+          if (-Not (Test-Path $env:ZAP_REPORT_PATH)) {
+              New-Item -ItemType Directory -Path $env:ZAP_REPORT_PATH | Out-Null
+          }
+          $timestamp = Get-Date -Format "yyyyMMddHHmmss"
+          $reportFile = Join-Path $env:ZAP_REPORT_PATH "ZapReport_$timestamp.html"
 
-      # 1️⃣2️⃣ Upload ZAP report
-      - name: Upload ZAP report
-        uses: actions/upload-artifact@v4
-        with:
-          name: zap-report
-          path: C:\SSDLC\ZapScan_Reports\juice-shop-zap-report.html
+          Start-Process -FilePath $env:ZAP_PATH -ArgumentList "-cmd", "-quickurl", "http://localhost:3000", "-quickout", $reportFile, "-quickprogress"
+
+          Write-Host "[INFO] Waiting for ZAP scan to finish..."
+          Start-Sleep -Seconds 180
+
+          Write-Host "✅ OWASP ZAP scan complete. Report saved to $reportFile"
