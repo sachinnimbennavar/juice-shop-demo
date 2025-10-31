@@ -68,7 +68,7 @@ jobs:
               Write-Host "[INFO] Skipping frontend build (cached output found)."
           }
 
-      # 6️⃣ Prepare deployment artifact
+      # 6️⃣ Prepare deployment artifact (minimal for manual CLI run)
       - name: Prepare deployment artifact
         shell: powershell
         run: |
@@ -76,7 +76,14 @@ jobs:
           $artifactFolder = "build_output"
           if (Test-Path $artifactFolder) { Remove-Item -Recurse -Force $artifactFolder }
           New-Item -ItemType Directory -Path $artifactFolder | Out-Null
-          $filesToInclude = @("frontend/dist/frontend","server.js","package.json","web.config")
+          # Only include files/folders needed to run Juice Shop manually via CLI
+          $filesToInclude = @(
+              "server.js",
+              "package.json",
+              "package-lock.json",
+              "build",
+              "frontend/dist/frontend"
+          )
           foreach ($item in $filesToInclude) {
               if (Test-Path $item) {
                   $dest = Join-Path $artifactFolder $item
@@ -141,7 +148,7 @@ jobs:
           Expand-Archive -Path $zipFilePath -DestinationPath $env:DEPLOY_PATH -Force
           Write-Host "✅ Artifact downloaded and extracted successfully."
 
-      # 9️⃣ Deploy to IIS
+      # 9️⃣ Deploy to IIS (optional, can skip if only CLI run)
       - name: 🚀 Deploy to IIS
         shell: powershell
         env:
