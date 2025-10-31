@@ -68,7 +68,7 @@ jobs:
               Write-Host "[INFO] Skipping frontend build (cached output found)."
           }
 
-      # 6️⃣ Prepare deployment artifact (includes backend folders)
+      # 6️⃣ Prepare deployment artifact
       - name: Prepare deployment artifact
         shell: powershell
         run: |
@@ -77,18 +77,18 @@ jobs:
           if (Test-Path $artifactFolder) { Remove-Item -Recurse -Force $artifactFolder }
           New-Item -ItemType Directory -Path $artifactFolder | Out-Null
 
-          # ✅ Include backend + frontend
+          # List of files/folders to include
           $filesToInclude = @(
-            "frontend/dist/frontend",
-            "server.js",
-            "package.json",
-            "web.config",
-            "data",
-            "routes",
-            "models",
-            "lib",
-            "config",
-            "views"
+              "frontend/dist/frontend",
+              "server.js",
+              "package.json",
+              "web.config",
+              "data",
+              "routes",
+              "models",
+              "lib",
+              "config",
+              "views"
           )
 
           foreach ($item in $filesToInclude) {
@@ -98,7 +98,7 @@ jobs:
                   if (!(Test-Path $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
                   Copy-Item -Path $item -Destination $dest -Recurse -Force
               } else {
-                  Write-Host "[WARN] Missing item: $item (skipping)"
+                  Write-Warning "[WARN] Missing item: $item (skipping)"
               }
           }
 
