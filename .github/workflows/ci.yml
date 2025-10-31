@@ -15,18 +15,11 @@ jobs:
     timeout-minutes: 180
 
     steps:
-      # 1️⃣ Checkout repository (optimized for speed)
+      # 1️⃣ Checkout repository (shallow for speed)
       - name: Checkout repository
         uses: actions/checkout@v3
         with:
-          fetch-depth: 1       # only the latest commit
-          submodules: false    # skip submodules
-          lfs: false           # skip Git LFS
-          sparse-checkout: |
-            frontend/
-            server.js
-            package.json
-            web.config
+          fetch-depth: 1
 
       # 2️⃣ Set Node memory
       - name: Set Node memory
