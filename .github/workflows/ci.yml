@@ -31,7 +31,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-juiceshop-
 
-      # 3️⃣ Install backend dependencies (only if missing)
+      # 3️⃣ Install backend dependencies (first-time only)
       - name: Install backend dependencies (first-time only)
         shell: powershell
         run: |
@@ -42,7 +42,7 @@ jobs:
               Write-Host "[INFO] Skipping backend install (already present)."
           }
 
-      # 4️⃣ Install frontend dependencies (only if missing)
+      # 4️⃣ Install frontend dependencies (first-time only)
       - name: Install frontend dependencies (first-time only)
         shell: powershell
         run: |
@@ -76,21 +76,8 @@ jobs:
           $artifactFolder = "build_output"
           if (Test-Path $artifactFolder) { Remove-Item -Recurse -Force $artifactFolder }
           New-Item -ItemType Directory -Path $artifactFolder | Out-Null
-
-          # List of files/folders to include
-          $filesToInclude = @(
-              "frontend/dist/frontend",
-              "server.js",
-              "package.json",
-              "web.config",
-              "data",
-              "routes",
-              "models",
-              "lib",
-              "config",
-              "views"
-          )
-
+          # Include frontend dist, backend build, package.json, and web.config
+          $filesToInclude = @("frontend/dist/frontend","build","package.json","web.config")
           foreach ($item in $filesToInclude) {
               if (Test-Path $item) {
                   $dest = Join-Path $artifactFolder $item
@@ -98,10 +85,9 @@ jobs:
                   if (!(Test-Path $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
                   Copy-Item -Path $item -Destination $dest -Recurse -Force
               } else {
-                  Write-Warning "[WARN] Missing item: $item (skipping)"
+                  Write-Host "[WARN] Missing item: $item (skipping)"
               }
           }
-
           Write-Host "[INFO] Artifact ready at $artifactFolder"
 
       # 7️⃣ Upload artifact to Nexus
@@ -159,7 +145,7 @@ jobs:
           Write-Host "✅ Artifact downloaded & extracted successfully."
 
       # 9️⃣ Deploy to IIS
-      - name: 🚀 Deploy to IIS
+      - name: Deploy to IIS
         shell: powershell
         env:
           DEPLOY_SOURCE: C:\SSDLC\Nexus_Unzips
@@ -187,17 +173,18 @@ jobs:
           Restart-WebAppPool -Name $env:IIS_APPPOOL
           Write-Host "✅ IIS Deployment completed successfully!"
 
-      # 🔟 Run OWASP ZAP scan on Juice Shop
-      - name: ⚡ Run OWASP ZAP Scan
+      # 🔟 Run OWASP ZAP Scan
+      - name: Run OWASP ZAP Scan
         shell: powershell
         env:
           ZAP_PATH: C:\SSDLC\ZAP_2_16_1_windows.exe
           ZAP_REPORT_PATH: C:\SSDLC\ZapScan_Reports
         run: |
-          Write-Host "[INFO] Starting Juice Shop Node.js server..."
-          cd C:\SSDLC\Nexus_Unzips
+          Write-Host "[INFO] Starting Juice Shop compiled server..."
+          cd C:\SSDLC\Nexus_Unzips\build
           $env:PATH += ";C:\Program Files\nodejs"
-          Start-Process "cmd.exe" -ArgumentList "/c npm start" -NoNewWindow
+          Start-Process "node.exe" -ArgumentList "app.js" -NoNewWindow
+          Write-Host "[INFO] Waiting 20 seconds for server to start..."
           Start-Sleep -Seconds 20
           Write-Host "[INFO] Running OWASP ZAP scan..."
           if (-Not (Test-Path $env:ZAP_REPORT_PATH)) {
