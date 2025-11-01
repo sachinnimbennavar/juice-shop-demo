@@ -51,22 +51,17 @@ jobs:
               cd ..
           }
 
-      # 5. Build frontend
+      # 5. Build frontend with increased Node memory
       - name: Build frontend
         shell: powershell
         run: |
-          if (-Not (Test-Path "frontend/dist/frontend")) {
-              Write-Host "[INFO] Building Angular frontend..."
-              cd frontend
-              npm run build -- --configuration production --watch=false
-              cd ..
-          }
+          Write-Host "[INFO] Setting Node memory to 8GB for Angular build"
+          $env:NODE_OPTIONS="--max_old_space_size=8192"
+          cd frontend
+          npm run build -- --configuration production --watch=false
+          cd ..
 
-      # 6. Set Node memory for backend build
-      - name: Set Node memory
-        run: set NODE_OPTIONS=--max_old_space_size=4096
-
-      # 7. Compile backend TypeScript
+      # 6. Compile backend TypeScript
       - name: Compile backend TypeScript
         shell: powershell
         run: |
@@ -77,7 +72,7 @@ jobs:
               exit 1
           }
 
-      # 8. Prepare deployment artifact
+      # 7. Prepare deployment artifact
       - name: Prepare deployment artifact
         shell: powershell
         run: |
@@ -94,7 +89,7 @@ jobs:
               }
           }
 
-      # 9. Upload artifact to Nexus
+      # 8. Upload artifact to Nexus
       - name: Upload artifact to Nexus
         shell: powershell
         env:
@@ -110,7 +105,7 @@ jobs:
           $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/$version/$serverZip"
           Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $serverZip -Headers $headers -ContentType "application/zip"
 
-      # 10. Download & unzip latest artifact
+      # 9. Download & unzip latest artifact
       - name: Download & unzip latest artifact
         shell: powershell
         env:
@@ -133,7 +128,7 @@ jobs:
           Invoke-WebRequest -Uri $zipDownloadUrl -OutFile $zipFilePath -Headers $headers
           Expand-Archive -Path $zipFilePath -DestinationPath $env:DEPLOY_PATH -Force
 
-      # 11. Deploy to IIS
+      # 10. Deploy to IIS
       - name: Deploy to IIS
         shell: powershell
         env:
@@ -152,7 +147,7 @@ jobs:
           Set-ItemProperty "IIS:\Sites\$env:IIS_SITE" -Name applicationPool -Value $env:IIS_APPPOOL
           Restart-WebAppPool -Name $env:IIS_APPPOOL
 
-      # 12. Run OWASP ZAP Scan
+      # 11. Run OWASP ZAP Scan
       - name: Run OWASP ZAP Scan
         shell: powershell
         env:
