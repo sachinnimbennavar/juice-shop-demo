@@ -30,7 +30,6 @@ jobs:
           key: ${{ runner.os }}-juiceshop-${{ hashFiles('package-lock.json', 'frontend/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-juiceshop-
-
       # 3️⃣ Install backend dependencies (first-time only)
       - name: Install backend dependencies (first-time only)
         shell: powershell
@@ -41,7 +40,6 @@ jobs:
           } else {
               Write-Host "[INFO] Skipping backend install (already present)."
           }
-
       # 4️⃣ Install frontend dependencies (first-time only)
       - name: Install frontend dependencies (first-time only)
         shell: powershell
@@ -55,17 +53,14 @@ jobs:
               Write-Host "[INFO] Skipping frontend install (already present)."
           }
 
-      # 💡 Increase Node memory before Angular build
-      - name: Set Node memory
-        shell: powershell
-        run: setx NODE_OPTIONS "--max_old_space_size=4096"
-
-      # 5️⃣ Build frontend (first-time only)
+      # 💡 Build frontend with increased Node memory (fix crash)
       - name: Build frontend (first-time only)
         shell: powershell
         run: |
+          Write-Host "[INFO] Setting Node memory and building Angular frontend..."
+          $env:NODE_OPTIONS="--max_old_space_size=4096"
           if (-Not (Test-Path "frontend/dist/frontend")) {
-              Write-Host "[INFO] Building Angular frontend..."
+              Write-Host "[INFO] Building Angular frontend with extra memory..."
               cd frontend
               npm run build -- --configuration production --watch=false
               cd ..
