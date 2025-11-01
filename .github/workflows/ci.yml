@@ -1,4 +1,4 @@
-name: Juice Shop Full CI/CD Pipeline (TypeScript + OWASP ZAP Scan)
+name: 🧪 Juice Shop SSDLC Pipeline
 
 on:
   workflow_dispatch:
@@ -7,156 +7,119 @@ jobs:
   build-upload-deploy:
     runs-on: self-hosted
     timeout-minutes: 180
+    env:
+      NODE_OPTIONS: --max_old_space_size=4096
+      ARTIFACT_DIR: C:\SSDLC\Artifacts
+      NEXUS_UNZIP_DIR: C:\SSDLC\Nexus_Unzips
+      ZAP_REPORT_DIR: C:\SSDLC\ZapScan_Reports
+      ZAP_PATH: "C:\\Program Files\\OWASP\\Zed Attack Proxy\\zap.bat"
 
     steps:
-      # 1️⃣ Checkout repo
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
+    # 1️⃣ Checkout
+    - name: Checkout repository
+      uses: actions/checkout@v4
 
-      # 2️⃣ Cache frontend & backend dependencies
-      - name: Cache dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            node_modules
-            frontend/node_modules
-            frontend/dist
-            dist
-          key: ${{ runner.os }}-juiceshop-${{ hashFiles('package-lock.json', 'frontend/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-juiceshop-
+    # 2️⃣ Set Node memory (redundant but kept per your request)
+    - name: Set Node memory
+      shell: powershell
+      run: |
+        setx NODE_OPTIONS "--max_old_space_size=4096"
+        Write-Host "Increased Node memory limit to 4 GB."
 
-      # 3️⃣ Install backend dependencies
-      - name: Install backend dependencies
-        shell: powershell
-        run: |
-          if (-Not (Test-Path "node_modules")) {
-              Write-Host "[INFO] Installing backend dependencies..."
-              npm install --prefer-offline --no-audit
-          }
+    # 3️⃣ Install backend dependencies
+    - name: Install backend dependencies
+      shell: powershell
+      run: |
+        Write-Host "[INFO] Installing backend dependencies..."
+        npm install
 
-      # 4️⃣ Install frontend dependencies
-      - name: Install frontend dependencies
-        shell: powershell
-        run: |
-          if (-Not (Test-Path "frontend/node_modules")) {
-              Write-Host "[INFO] Installing frontend dependencies..."
-              cd frontend
-              npm install --legacy-peer-deps --prefer-offline --no-audit
-              cd ..
-          }
+    # 4️⃣ Build frontend
+    - name: Build Angular frontend
+      shell: powershell
+      run: |
+        Write-Host "[INFO] Building Angular frontend..."
+        cd frontend
+        npm install
+        npm run build -- --configuration production
+        cd ..
 
-      # 5️⃣ Build frontend
-      - name: Build frontend
-        shell: powershell
-        run: |
-          if (-Not (Test-Path "frontend/dist/frontend")) {
-              Write-Host "[INFO] Building Angular frontend..."
-              cd frontend
-              npm run build -- --configuration production --watch=false
-              cd ..
-          }
+    # 5️⃣ Compile TypeScript backend
+    - name: Compile TypeScript backend
+      shell: powershell
+      run: |
+        Write-Host "[INFO] Compiling backend (TypeScript to JS)..."
+        npx tsc
 
-      # 6️⃣ Compile backend TypeScript
-      - name: Compile backend TypeScript
-        shell: powershell
-        run: |
-          Write-Host "[INFO] Compiling TypeScript backend..."
-          npx tsc
-          if (-Not (Test-Path "dist/server.js")) {
-              Write-Host "[ERROR] Compilation failed, server.js not found in dist"
-              exit 1
-          }
+    # 6️⃣ Prepare deployment artifact
+    - name: Prepare artifact for Nexus upload
+      shell: powershell
+      run: |
+        $artifactDir = $env:ARTIFACT_DIR
+        if (Test-Path $artifactDir) { Remove-Item $artifactDir -Recurse -Force }
+        New-Item -Path $artifactDir -ItemType Directory | Out-Null
+        Write-Host "[INFO] Copying build output to artifact folder..."
+        Copy-Item -Path "*" -Destination $artifactDir -Recurse -Force
+        Remove-Item -Path "$artifactDir/frontend/node_modules" -Recurse -Force -ErrorAction SilentlyContinue
+        Compress-Archive -Path "$artifactDir\*" -DestinationPath "$artifactDir\juice-shop-full.zip" -Force
+        Write-Host "[INFO] Artifact prepared successfully."
 
-      # 7️⃣ Prepare deployment artifact
-      - name: Prepare deployment artifact
-        shell: powershell
-        run: |
-          $artifactFolder = "build_output"
-          if (Test-Path $artifactFolder) { Remove-Item -Recurse -Force $artifactFolder }
-          New-Item -ItemType Directory -Path $artifactFolder | Out-Null
-          $filesToInclude = @("frontend/dist/frontend","dist","package.json","web.config")
-          foreach ($item in $filesToInclude) {
-              if (Test-Path $item) {
-                  $dest = Join-Path $artifactFolder $item
-                  $destDir = Split-Path $dest
-                  if (!(Test-Path $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
-                  Copy-Item -Path $item -Destination $dest -Recurse -Force
-              }
-          }
+    # 7️⃣ Upload artifact to Nexus
+    - name: Upload artifact to Nexus
+      shell: powershell
+      env:
+        NEXUS_URL: ${{ secrets.NEXUS_URL }}
+        NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+        NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+      run: |
+        Write-Host "[INFO] Uploading artifact to Nexus..."
+        $zipPath = "$env:ARTIFACT_DIR\\juice-shop-full.zip"
+        $uploadUrl = "$env:NEXUS_URL/repository/ssdls-artifacts/juice-shop-full.zip"
+        Invoke-RestMethod -Uri $uploadUrl -Method PUT -InFile $zipPath -Credential (New-Object PSCredential($env:NEXUS_USERNAME,(ConvertTo-SecureString $env:NEXUS_PASSWORD -AsPlainText -Force)))
+        Write-Host "[INFO] Artifact uploaded successfully."
 
-      # 8️⃣ Upload artifact to Nexus
-      - name: Upload artifact to Nexus
-        shell: powershell
-        env:
-          NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
-          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
-          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
-        run: |
-          $version = (Get-Date -Format "yyyyMMddHHmmss")
-          $serverZip = "full-repo-$version.zip"
-          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
-          $headers = @{ Authorization = "Basic $base64Auth" }
-          Compress-Archive -Path "build_output/*" -DestinationPath $serverZip -Force
-          $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/$version/$serverZip"
-          Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $serverZip -Headers $headers -ContentType "application/zip"
+    # 8️⃣ Download & unzip artifact
+    - name: Download & unzip artifact from Nexus
+      shell: powershell
+      env:
+        NEXUS_URL: ${{ secrets.NEXUS_URL }}
+        NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+        NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+      run: |
+        $unzipPath = $env:NEXUS_UNZIP_DIR
+        if (Test-Path $unzipPath) { Remove-Item $unzipPath -Recurse -Force }
+        New-Item -ItemType Directory -Force -Path $unzipPath | Out-Null
+        $zipPath = "$unzipPath\\juice-shop-full.zip"
+        $downloadUrl = "$env:NEXUS_URL/repository/ssdls-artifacts/juice-shop-full.zip"
+        Write-Host "[INFO] Downloading artifact from Nexus..."
+        Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath -UseBasicParsing -Credential (New-Object PSCredential($env:NEXUS_USERNAME,(ConvertTo-SecureString $env:NEXUS_PASSWORD -AsPlainText -Force)))
+        Expand-Archive -Path $zipPath -DestinationPath $unzipPath -Force
+        Write-Host "[INFO] Artifact unzipped at $unzipPath."
 
-      # 9️⃣ Download & unzip latest artifact
-      - name: Download & unzip latest artifact
-        shell: powershell
-        env:
-          NEXUS_URL: http://127.0.0.1:8081
-          NEXUS_REPO: JuiceShopMavenDemo
-          DEPLOY_PATH: C:\SSDLC\Nexus_Unzips
-          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
-          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
-        run: |
-          if (Test-Path $env:DEPLOY_PATH) { Remove-Item -Path "$env:DEPLOY_PATH\*" -Recurse -Force }
-          else { New-Item -ItemType Directory -Path $env:DEPLOY_PATH -Force | Out-Null }
-          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
-          $headers = @{ Authorization = "Basic $base64Auth" }
-          $searchUrl = "${env:NEXUS_URL}/service/rest/v1/search?repository=${env:NEXUS_REPO}&group=com.example.juiceshop&name=full-repo"
-          $response = Invoke-RestMethod -Uri $searchUrl -Headers $headers -Method Get
-          $latest = $response.items | Sort-Object { $_.version } -Descending | Select-Object -First 1
-          $latestVersion = $latest.version
-          $zipDownloadUrl = $latest.assets[0].downloadUrl
-          $zipFilePath = Join-Path $env:DEPLOY_PATH "full-repo-$latestVersion.zip"
-          Invoke-WebRequest -Uri $zipDownloadUrl -OutFile $zipFilePath -Headers $headers
-          Expand-Archive -Path $zipFilePath -DestinationPath $env:DEPLOY_PATH -Force
+    # 9️⃣ Install dependencies after unzip
+    - name: Install dependencies (post-unzip)
+      shell: powershell
+      run: |
+        cd $env:NEXUS_UNZIP_DIR
+        npm install --production
+        Write-Host "[INFO] Dependencies installed after unzip."
 
-      # 🔟 Deploy to IIS
-      - name: Deploy to IIS
-        shell: powershell
-        env:
-          DEPLOY_SOURCE: C:\SSDLC\Nexus_Unzips
-          DEPLOY_TARGET: C:\inetpub\wwwroot\JuiceShop
-          IIS_APPPOOL: JuiceShopAppPool
-          IIS_SITE: "Default Web Site"
-        run: |
-          Import-Module WebAdministration
-          if (Test-Path $env:DEPLOY_TARGET) { Remove-Item -Path "$env:DEPLOY_TARGET\*" -Recurse -Force }
-          Copy-Item -Path "$env:DEPLOY_SOURCE\*" -Destination $env:DEPLOY_TARGET -Recurse -Force
-          if (-not (Test-Path "IIS:\AppPools\$env:IIS_APPPOOL")) {
-              New-WebAppPool -Name $env:IIS_APPPOOL | Out-Null
-              Set-ItemProperty "IIS:\AppPools\$env:IIS_APPPOOL" -Name processModel.identityType -Value "ApplicationPoolIdentity"
-          }
-          Set-ItemProperty "IIS:\Sites\$env:IIS_SITE" -Name applicationPool -Value $env:IIS_APPPOOL
-          Restart-WebAppPool -Name $env:IIS_APPPOOL
+    # 🔟 Start Node server
+    - name: Start Juice Shop server
+      shell: powershell
+      run: |
+        Write-Host "[INFO] Starting Juice Shop server..."
+        Start-Process powershell -ArgumentList "cd $env:NEXUS_UNZIP_DIR; npm start" -NoNewWindow
+        Start-Sleep -Seconds 20
+        Write-Host "[INFO] Juice Shop should now be running at http://localhost:3000"
 
-      # 1️⃣1️⃣ Run OWASP ZAP Scan
-      - name: Run OWASP ZAP Scan
-        shell: powershell
-        env:
-          ZAP_PATH: C:\SSDLC\ZAP_2_16_1_windows.exe
-          ZAP_REPORT_PATH: C:\SSDLC\ZapScan_Reports
-        run: |
-          cd C:\SSDLC\Nexus_Unzips
-          Start-Process "cmd.exe" -ArgumentList "/c npm start" -NoNewWindow
-          Start-Sleep -Seconds 20
-          if (-Not (Test-Path $env:ZAP_REPORT_PATH)) { New-Item -ItemType Directory -Path $env:ZAP_REPORT_PATH | Out-Null }
-          $timestamp = Get-Date -Format "yyyyMMddHHmmss"
-          $reportFile = Join-Path $env:ZAP_REPORT_PATH "ZapReport_$timestamp.html"
-          Start-Process -FilePath $env:ZAP_PATH -ArgumentList "-cmd", "-quickurl", "http://localhost:3000", "-quickout", $reportFile, "-quickprogress"
-          Start-Sleep -Seconds 180
+    # 1️⃣1️⃣ Run OWASP ZAP scan
+    - name: Run OWASP ZAP scan
+      shell: powershell
+      run: |
+        $zapReportPath = "$env:ZAP_REPORT_DIR"
+        if (Test-Path $zapReportPath) { Remove-Item $zapReportPath -Recurse -Force }
+        New-Item -Path $zapReportPath -ItemType Directory | Out-Null
+        Write-Host "[INFO] Starting OWASP ZAP scan on http://localhost:3000"
+        & "$env:ZAP_PATH" -cmd -quickurl http://localhost:3000 -quickout "$zapReportPath\ZAP-Report.html" -quickprogress
+        Write-Host "[INFO] ZAP scan complete. Report available at $zapReportPath"
+
