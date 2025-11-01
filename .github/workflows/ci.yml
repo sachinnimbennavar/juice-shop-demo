@@ -55,6 +55,11 @@ jobs:
               Write-Host "[INFO] Skipping frontend install (already present)."
           }
 
+      # 💡 NEW STEP — increase Node memory before Angular build
+      - name: Set Node memory
+        shell: powershell
+        run: setx NODE_OPTIONS "--max_old_space_size=4096"
+
       # 5️⃣ Build frontend (first-time only)
       - name: Build frontend (first-time only)
         shell: powershell
@@ -91,6 +96,7 @@ jobs:
           Get-ChildItem -Path "." -Directory -Recurse -Force |
             Where-Object { $_.Name -eq "node_modules" } |
             ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+
           $requiredItems = @("frontend/dist/frontend","build","package.json")
           foreach ($item in $requiredItems) {
               if (Test-Path $item) {
@@ -103,6 +109,7 @@ jobs:
                   exit 1
               }
           }
+
           $optionalItem = "web.config"
           if (Test-Path $optionalItem) {
               $dest = Join-Path $artifactFolder $optionalItem
@@ -111,6 +118,7 @@ jobs:
           } else {
               Write-Host "[INFO] Optional item missing, skipping: $optionalItem"
           }
+
           Write-Host "[INFO] Artifact ready at $artifactFolder"
 
       # 8️⃣ Upload artifact to Nexus
@@ -149,6 +157,7 @@ jobs:
           } else {
               New-Item -ItemType Directory -Path $env:DEPLOY_PATH -Force | Out-Null
           }
+
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
           $searchUrl = "${env:NEXUS_URL}/service/rest/v1/search?repository=${env:NEXUS_REPO}&group=com.example.juiceshop&name=full-repo"
@@ -157,26 +166,11 @@ jobs:
           $latestVersion = $latest.version
           $zipDownloadUrl = $latest.assets[0].downloadUrl
           $zipFilePath = Join-Path $env:DEPLOY_PATH "full-repo-$latestVersion.zip"
+
           Write-Host "[INFO] Downloading ZIP to $zipFilePath ..."
           Invoke-WebRequest -Uri $zipDownloadUrl -OutFile $zipFilePath -Headers $headers
           Expand-Archive -Path $zipFilePath -DestinationPath $env:DEPLOY_PATH -Force
           Write-Host "✅ Artifact downloaded and extracted successfully."
-
-      # 🧩 NEW STEP — Generate encryption keys if missing
-      - name: Generate encryption keys if missing
-        shell: powershell
-        run: |
-          $keyDir = "C:\SSDLC\Nexus_Unzips\encryptionkeys"
-          if (-Not (Test-Path $keyDir)) {
-            Write-Host "[INFO] Creating encryptionkeys directory..."
-            New-Item -ItemType Directory -Force -Path $keyDir | Out-Null
-          }
-          if (-Not ((Test-Path "$keyDir\jwt.key") -and (Test-Path "$keyDir\jwt.pub"))) {
-            Write-Host "[INFO] Generating RSA key pair for JWT..."
-            node -e "const fs=require('fs');const {generateKeyPairSync}=require('crypto');const {publicKey,privateKey}=generateKeyPairSync('rsa',{modulusLength:2048,publicKeyEncoding:{type:'spki',format:'pem'},privateKeyEncoding:{type:'pkcs8',format:'pem'}});fs.writeFileSync('$keyDir\\jwt.pub',publicKey);fs.writeFileSync('$keyDir\\jwt.key',privateKey);"
-          } else {
-            Write-Host "[INFO] Encryption keys already exist. Skipping generation."
-          }
 
       # 🔟 Start Node.js server (ignoring postinstall scripts)
       - name: Start Node.js server
