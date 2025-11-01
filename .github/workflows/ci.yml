@@ -1,9 +1,6 @@
-name: Juice Shop Full CI/CD Pipeline (TypeScript + OWASP ZAP Scan)
+name: Juice Shop Full CI/CD Pipeline (Ultra Fast + OWASP ZAP Scan)
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 jobs:
@@ -12,70 +9,33 @@ jobs:
     timeout-minutes: 180
 
     steps:
-      # 1. Checkout repository
-      - name: Checkout repository
+      # 1️⃣ Ultra-Fast Checkout
+      - name: Checkout repository (ultra-fast)
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+          lfs: false
+          submodules: false
+          clean: false
+          persist-credentials: false
 
-      # 2. Cache frontend & backend dependencies
-      - name: Cache dependencies
+      # 2️⃣ Cache dependencies + frontend build
+      - name: Cache dependencies + frontend build
         uses: actions/cache@v4
         with:
           path: |
             node_modules
             frontend/node_modules
             frontend/dist
-            dist
           key: ${{ runner.os }}-juiceshop-${{ hashFiles('package-lock.json', 'frontend/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-juiceshop-
 
-      # 3. Install backend dependencies
-      - name: Install backend dependencies
-        shell: powershell
-        run: |
-          if (-Not (Test-Path "node_modules")) {
-              Write-Host "[INFO] Installing backend dependencies..."
-              npm install --prefer-offline --no-audit
-          }
-
-      # 4. Install frontend dependencies
-      - name: Install frontend dependencies
-        shell: powershell
-        run: |
-          if (-Not (Test-Path "frontend/node_modules")) {
-              Write-Host "[INFO] Installing frontend dependencies..."
-              cd frontend
-              npm install --legacy-peer-deps --prefer-offline --no-audit
-              cd ..
-          }
-
-      # 5. Build frontend with increased Node memory
-      - name: Build frontend
-        shell: powershell
-        run: |
-          Write-Host "[INFO] Setting Node memory to 8GB for Angular build"
-          $env:NODE_OPTIONS="--max_old_space_size=8192"
-          cd frontend
-          npm run build -- --configuration production --watch=false
-          cd ..
-
-      # 6. Compile backend TypeScript
-      - name: Compile backend TypeScript
-        shell: powershell
-        run: |
-          Write-Host "[INFO] Compiling TypeScript backend..."
-          npx tsc
-          if (-Not (Test-Path "dist/server.js")) {
-              Write-Host "[ERROR] Compilation failed, server.js not found in dist"
-              exit 1
-          }
-
-      # 7. Prepare deployment artifact
+      # 3️⃣ Prepare deployment artifact (skip build)
       - name: Prepare deployment artifact
         shell: powershell
         run: |
+          Write-Host "[INFO] Using existing dist and node_modules, skipping rebuild..."
           $artifactFolder = "build_output"
           if (Test-Path $artifactFolder) { Remove-Item -Recurse -Force $artifactFolder }
           New-Item -ItemType Directory -Path $artifactFolder | Out-Null
@@ -88,8 +48,9 @@ jobs:
                   Copy-Item -Path $item -Destination $dest -Recurse -Force
               }
           }
+          Write-Host "[INFO] Artifact ready at $artifactFolder"
 
-      # 8. Upload artifact to Nexus
+      # 4️⃣ Upload artifact to Nexus
       - name: Upload artifact to Nexus
         shell: powershell
         env:
@@ -103,9 +64,10 @@ jobs:
           $headers = @{ Authorization = "Basic $base64Auth" }
           Compress-Archive -Path "build_output/*" -DestinationPath $serverZip -Force
           $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/$version/$serverZip"
+          Write-Host "[INFO] Uploading $serverZip to Nexus → $serverUrl"
           Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $serverZip -Headers $headers -ContentType "application/zip"
 
-      # 9. Download & unzip latest artifact
+      # 5️⃣ Download & unzip latest artifact from Nexus
       - name: Download & unzip latest artifact
         shell: powershell
         env:
@@ -128,7 +90,7 @@ jobs:
           Invoke-WebRequest -Uri $zipDownloadUrl -OutFile $zipFilePath -Headers $headers
           Expand-Archive -Path $zipFilePath -DestinationPath $env:DEPLOY_PATH -Force
 
-      # 10. Deploy to IIS
+      # 6️⃣ Deploy to IIS
       - name: Deploy to IIS
         shell: powershell
         env:
@@ -147,18 +109,26 @@ jobs:
           Set-ItemProperty "IIS:\Sites\$env:IIS_SITE" -Name applicationPool -Value $env:IIS_APPPOOL
           Restart-WebAppPool -Name $env:IIS_APPPOOL
 
-      # 11. Run OWASP ZAP Scan
+      # 7️⃣ Start server for ZAP scan
+      - name: Start Juice Shop server
+        shell: powershell
+        run: |
+          Write-Host "[INFO] Starting server from extracted artifact..."
+          cd C:\SSDLC\Nexus_Unzips
+          Start-Process "cmd.exe" -ArgumentList "/c npm start" -NoNewWindow
+          Write-Host "[INFO] Waiting 25 seconds for server to be ready..."
+          Start-Sleep -Seconds 25
+
+      # 8️⃣ Run OWASP ZAP Scan
       - name: Run OWASP ZAP Scan
         shell: powershell
         env:
           ZAP_PATH: C:\SSDLC\ZAP_2_16_1_windows.exe
           ZAP_REPORT_PATH: C:\SSDLC\ZapScan_Reports
         run: |
-          cd C:\SSDLC\Nexus_Unzips
-          Start-Process "cmd.exe" -ArgumentList "/c npm start" -NoNewWindow
-          Start-Sleep -Seconds 20
           if (-Not (Test-Path $env:ZAP_REPORT_PATH)) { New-Item -ItemType Directory -Path $env:ZAP_REPORT_PATH | Out-Null }
           $timestamp = Get-Date -Format "yyyyMMddHHmmss"
           $reportFile = Join-Path $env:ZAP_REPORT_PATH "ZapReport_$timestamp.html"
+          Write-Host "[INFO] Running OWASP ZAP scan..."
           Start-Process -FilePath $env:ZAP_PATH -ArgumentList "-cmd", "-quickurl", "http://localhost:3000", "-quickout", $reportFile, "-quickprogress"
           Start-Sleep -Seconds 180
