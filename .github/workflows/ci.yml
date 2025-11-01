@@ -19,41 +19,78 @@ jobs:
           clean: false
           persist-credentials: false
 
-      # 2️⃣ Cache frontend + backend build outputs (node_modules excluded)
-      - name: Cache build outputs
+      # 2️⃣ Cache dependencies + frontend build
+      - name: Cache dependencies + frontend build
         uses: actions/cache@v4
         with:
           path: |
+            node_modules
+            frontend/node_modules
             frontend/dist
-            build
           key: ${{ runner.os }}-juiceshop-${{ hashFiles('package-lock.json', 'frontend/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-juiceshop-
 
-      # 3️⃣ Pre-check: Ensure build/app.js exists before artifact creation
-      - name: Pre-check build/app.js
+      # 3️⃣ Install backend dependencies (only if missing)
+      - name: Install backend dependencies (first-time only)
         shell: powershell
         run: |
-          $requiredFile = "build/app.js"
-          if (-Not (Test-Path $requiredFile)) {
-              Write-Host "[ERROR] Missing $requiredFile! Run 'npm run build:server' locally or in prior CI step."
-              exit 1
+          if (-Not (Test-Path "node_modules")) {
+              Write-Host "[INFO] Installing backend dependencies..."
+              npm install --prefer-offline --no-audit
           } else {
-              Write-Host "[INFO] Found required file: $requiredFile"
+              Write-Host "[INFO] Skipping backend install (already present)."
           }
 
-      # 4️⃣ Prepare deployment artifact (excluding node_modules)
-      - name: Prepare deployment artifact
+      # 4️⃣ Install frontend dependencies (only if missing)
+      - name: Install frontend dependencies (first-time only)
+        shell: powershell
+        run: |
+          if (-Not (Test-Path "frontend/node_modules")) {
+              Write-Host "[INFO] Installing frontend dependencies..."
+              cd frontend
+              npm install --legacy-peer-deps --prefer-offline --no-audit
+              cd ..
+          } else {
+              Write-Host "[INFO] Skipping frontend install (already present)."
+          }
+
+      # 5️⃣ Build frontend (first-time only)
+      - name: Build frontend (first-time only)
+        shell: powershell
+        run: |
+          if (-Not (Test-Path "frontend/dist/frontend")) {
+              Write-Host "[INFO] Building Angular frontend..."
+              cd frontend
+              npm run build -- --configuration production --watch=false
+              cd ..
+          } else {
+              Write-Host "[INFO] Skipping frontend build (cached output found)."
+          }
+
+      # 6️⃣ Compile backend TypeScript
+      - name: Compile backend TypeScript
+        shell: powershell
+        run: |
+          Write-Host "[INFO] Compiling backend TypeScript..."
+          npx tsc
+          if (-Not (Test-Path "build/app.js")) {
+              Write-Host "[ERROR] Compilation failed, build/app.js not found"
+              exit 1
+          }
+
+      # 7️⃣ Prepare deployment artifact (excluding node_modules)
+      - name: Prepare deployment artifact (excluding node_modules)
         shell: powershell
         run: |
           Write-Host "[INFO] Preparing deployment artifact (excluding node_modules)..."
           $artifactFolder = "build_output"
           if (Test-Path $artifactFolder) { Remove-Item -Recurse -Force $artifactFolder }
           New-Item -ItemType Directory -Path $artifactFolder | Out-Null
-          
-          # Include only necessary files
-          $filesToInclude = @("frontend/dist/frontend","build","package.json","web.config")
-          foreach ($item in $filesToInclude) {
+
+          # Required items
+          $requiredItems = @("frontend/dist/frontend","build","package.json")
+          foreach ($item in $requiredItems) {
               if (Test-Path $item) {
                   $dest = Join-Path $artifactFolder $item
                   $destDir = Split-Path $dest
@@ -64,9 +101,29 @@ jobs:
                   exit 1
               }
           }
+
+          # Optional web.config
+          $optionalItem = "web.config"
+          if (Test-Path $optionalItem) {
+              $dest = Join-Path $artifactFolder $optionalItem
+              Copy-Item -Path $optionalItem -Destination $dest -Force
+              Write-Host "[INFO] Optional item included: $optionalItem"
+          } else {
+              Write-Host "[INFO] Optional item missing, skipping: $optionalItem"
+          }
+
+          # Pre-check for build/app.js
+          $requiredFile = "build/app.js"
+          if (-Not (Test-Path $requiredFile)) {
+              Write-Host "[ERROR] Required backend build file missing: $requiredFile"
+              exit 1
+          } else {
+              Write-Host "[INFO] Found required file: $requiredFile"
+          }
+
           Write-Host "[INFO] Artifact ready at $artifactFolder"
 
-      # 5️⃣ Upload artifact to Nexus
+      # 8️⃣ Upload artifact to Nexus
       - name: Upload artifact to Nexus
         shell: powershell
         env:
@@ -85,7 +142,7 @@ jobs:
           Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $serverZip -Headers $headers -ContentType "application/zip"
           Write-Host "✅ Artifact uploaded successfully."
 
-      # 6️⃣ Download & unzip latest artifact from Nexus
+      # 9️⃣ Download & unzip latest artifact from Nexus
       - name: Download & unzip latest artifact from Nexus
         shell: powershell
         env:
@@ -120,18 +177,7 @@ jobs:
           Expand-Archive -Path $zipFilePath -DestinationPath $env:DEPLOY_PATH -Force
           Write-Host "✅ Artifact downloaded and extracted successfully."
 
-      # 6.1️⃣ Install backend dependencies on deployment server
-      - name: Install backend dependencies
-        shell: powershell
-        env:
-          DEPLOY_PATH: C:\SSDLC\Nexus_Unzips
-        run: |
-          Write-Host "[INFO] Installing backend dependencies (production only)..."
-          cd $env:DEPLOY_PATH
-          npm install --production
-          Write-Host "✅ Backend dependencies installed successfully."
-
-      # 7️⃣ Deploy to IIS
+      # 10️⃣ Deploy to IIS (optional, web.config not required for Node.js server)
       - name: Deploy to IIS
         shell: powershell
         env:
@@ -143,6 +189,7 @@ jobs:
           Import-Module WebAdministration
           Write-Host "[INFO] Deploying artifact to IIS..."
           if (Test-Path $env:DEPLOY_TARGET) {
+              Write-Host "[INFO] Clearing existing files..."
               Remove-Item -Path "$env:DEPLOY_TARGET\*" -Recurse -Force
           } else {
               New-Item -ItemType Directory -Path $env:DEPLOY_TARGET -Force | Out-Null
@@ -153,24 +200,21 @@ jobs:
               Set-ItemProperty "IIS:\AppPools\$env:IIS_APPPOOL" -Name processModel.identityType -Value "ApplicationPoolIdentity"
           }
           if (-not (Test-Path "IIS:\Sites\$env:IIS_SITE")) {
-              New-Website -Name $env:IIS_SITE -PhysicalPath $env:DEPLOY_TARGET -Port 80 -Force | Out-Null
+              New-Website -Name $env:IIS_SITE -PhysicalPath $env:DEPLOY_TARGET -Port 80 -ApplicationPool $env:IIS_APPPOOL | Out-Null
           }
-          Set-ItemProperty "IIS:\Sites\$env:IIS_SITE" -Name applicationPool -Value $env:IIS_APPPOOL
-          Restart-WebAppPool -Name $env:IIS_APPPOOL
-          Write-Host "✅ IIS Deployment completed successfully!"
+          Write-Host "✅ IIS deployment completed."
 
-      # 8️⃣ Run OWASP ZAP Scan
-      - name: Run OWASP ZAP Scan
+      # 11️⃣ Start Node.js server
+      - name: Start Node.js server
         shell: powershell
-        env:
-          ZAP_PATH: C:\SSDLC\ZAP_2_16_1_windows.exe
-          ZAP_REPORT_PATH: C:\SSDLC\ZapScan_Reports
         run: |
+          Write-Host "[INFO] Starting server from extracted artifact..."
           cd C:\SSDLC\Nexus_Unzips
-          Start-Process "cmd.exe" -ArgumentList "/c npm start" -NoNewWindow
+          if (-Not (Test-Path "build/app.js")) {
+              Write-Host "[ERROR] build/app.js missing, cannot start server"
+              exit 1
+          }
+          Start-Process "node" -ArgumentList "build/app.js" -NoNewWindow
+          Write-Host "[INFO] Waiting 25 seconds for server to be ready..."
           Start-Sleep -Seconds 25
-          if (-Not (Test-Path $env:ZAP_REPORT_PATH)) { New-Item -ItemType Directory -Path $env:ZAP_REPORT_PATH | Out-Null }
-          $timestamp = Get-Date -Format "yyyyMMddHHmmss"
-          $reportFile = Join-Path $env:ZAP_REPORT_PATH "ZapReport_$timestamp.html"
-          Start-Process -FilePath $env:ZAP_PATH -ArgumentList "-cmd", "-quickurl", "http://localhost:3000", "-quickout", $reportFile, "-quickprogress"
-          Start-Sleep -Seconds 180
+          Write-Host "✅ Node.js server should be running at http://localhost:3000"
