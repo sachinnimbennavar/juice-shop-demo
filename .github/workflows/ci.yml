@@ -88,15 +88,6 @@ jobs:
           if (Test-Path $artifactFolder) { Remove-Item -Recurse -Force $artifactFolder }
           New-Item -ItemType Directory -Path $artifactFolder | Out-Null
 
-          # Remove all node_modules folders before zipping
-          Write-Host "[INFO] Removing all node_modules folders..."
-          Get-ChildItem -Path "." -Directory -Recurse -Force |
-            Where-Object { $_.Name -eq "node_modules" } |
-            ForEach-Object {
-              Write-Host "Removing $($_.FullName)"
-              Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
-            }
-
           # Required items
           $requiredItems = @("frontend/dist/frontend","build","package.json")
           foreach ($item in $requiredItems) {
@@ -114,8 +105,7 @@ jobs:
           # Optional web.config
           $optionalItem = "web.config"
           if (Test-Path $optionalItem) {
-              $dest = Join-Path $artifactFolder $optionalItem
-              Copy-Item -Path $optionalItem -Destination $dest -Force
+              Copy-Item -Path $optionalItem -Destination (Join-Path $artifactFolder $optionalItem) -Force
               Write-Host "[INFO] Optional item included: $optionalItem"
           } else {
               Write-Host "[INFO] Optional item missing, skipping: $optionalItem"
@@ -144,9 +134,7 @@ jobs:
           $serverZip = "full-repo-$version.zip"
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
-
           if (Test-Path $serverZip) { Remove-Item $serverZip -Force }
-
           Compress-Archive -Path "build_output/*" -DestinationPath $serverZip -Force
           $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/$version/$serverZip"
           Write-Host "[INFO] Uploading $serverZip to Nexus → $serverUrl"
@@ -184,28 +172,29 @@ jobs:
           $latest = $response.items | Sort-Object { $_.version } -Descending | Select-Object -First 1
           $latestVersion = $latest.version
           $zipDownloadUrl = $latest.assets[0].downloadUrl
-          Write-Host "[INFO] Latest version: $latestVersion"
 
+          Write-Host "[INFO] Latest version: $latestVersion"
           $zipFilePath = Join-Path $env:DEPLOY_PATH "full-repo-$latestVersion.zip"
           Write-Host "[INFO] Downloading ZIP to $zipFilePath ..."
           Invoke-WebRequest -Uri $zipDownloadUrl -OutFile $zipFilePath -Headers $headers
-
           Expand-Archive -Path $zipFilePath -DestinationPath $env:DEPLOY_PATH -Force
           Write-Host "✅ Artifact downloaded and extracted successfully."
 
-      # 🔟 Start Node.js server after unzip
+      # 🔟 Start Node.js server from extracted artifact
       - name: Start Node.js server
         shell: powershell
         run: |
           Write-Host "[INFO] Starting Node.js server from extracted artifact..."
           cd C:\SSDLC\Nexus_Unzips
-          Write-Host "[INFO] Installing dependencies..."
-          npm install --prefer-offline --no-audit
           if (-Not (Test-Path "build/app.js")) {
-              Write-Host "[ERROR] build/app.js missing after unzip. Cannot start server."
+              Write-Host "[ERROR] build/app.js missing, cannot start server"
               exit 1
           }
-          Write-Host "[INFO] Launching server..."
+
+          Write-Host "[INFO] Installing dependencies (without postinstall scripts)..."
+          npm install --prefer-offline --no-audit --ignore-scripts
+
+          Write-Host "[INFO] Starting Node.js server..."
           Start-Process "node" -ArgumentList "build/app.js" -NoNewWindow
           Write-Host "[INFO] Waiting 25 seconds for server to be ready..."
           Start-Sleep -Seconds 25
