@@ -4,13 +4,13 @@ on:
   workflow_dispatch:  # Manual trigger only
 
 jobs:
-  deploy:
+  build-upload-deploy:
     runs-on: self-hosted
     timeout-minutes: 180
 
     steps:
-      # 1️⃣ Checkout repository (ultra-fast)
-      - name: Checkout repository
+      # 1️⃣ Ultra-Fast Checkout (minimal)
+      - name: Checkout repository (ultra-fast)
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
@@ -19,46 +19,54 @@ jobs:
           clean: false
           persist-credentials: false
 
-      # 2️⃣ Cache dependencies + frontend build (optional)
-      - name: Cache dependencies + frontend build
+      # 2️⃣ Cache frontend + backend build outputs (node_modules excluded)
+      - name: Cache build outputs
         uses: actions/cache@v4
         with:
           path: |
-            node_modules
-            frontend/node_modules
             frontend/dist
-          key: ${{ runner.os }}-juiceshop-${{ hashFiles('package-lock.json','frontend/package-lock.json') }}
+            build
+          key: ${{ runner.os }}-juiceshop-${{ hashFiles('package-lock.json', 'frontend/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-juiceshop-
 
-      # 3️⃣ Prepare deployment artifact
+      # 3️⃣ Pre-check: Ensure build/app.js exists before artifact creation
+      - name: Pre-check build/app.js
+        shell: powershell
+        run: |
+          $requiredFile = "build/app.js"
+          if (-Not (Test-Path $requiredFile)) {
+              Write-Host "[ERROR] Missing $requiredFile! Run 'npm run build:server' locally or in prior CI step."
+              exit 1
+          } else {
+              Write-Host "[INFO] Found required file: $requiredFile"
+          }
+
+      # 4️⃣ Prepare deployment artifact (excluding node_modules)
       - name: Prepare deployment artifact
         shell: powershell
         run: |
-          Write-Host "[INFO] Preparing deployment artifact..."
+          Write-Host "[INFO] Preparing deployment artifact (excluding node_modules)..."
           $artifactFolder = "build_output"
           if (Test-Path $artifactFolder) { Remove-Item -Recurse -Force $artifactFolder }
           New-Item -ItemType Directory -Path $artifactFolder | Out-Null
-
-          $filesToInclude = @(
-              "frontend/dist/frontend",  # frontend build
-              "build",                   # compiled backend
-              "node_modules",            # backend dependencies
-              "package.json",            # runtime
-              "web.config"               # IIS config
-          )
-
+          
+          # Include only necessary files
+          $filesToInclude = @("frontend/dist/frontend","build","package.json","web.config")
           foreach ($item in $filesToInclude) {
               if (Test-Path $item) {
                   $dest = Join-Path $artifactFolder $item
                   $destDir = Split-Path $dest
                   if (!(Test-Path $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
                   Copy-Item -Path $item -Destination $dest -Recurse -Force
+              } else {
+                  Write-Host "[ERROR] Required item missing: $item"
+                  exit 1
               }
           }
           Write-Host "[INFO] Artifact ready at $artifactFolder"
 
-      # 4️⃣ Upload artifact to Nexus
+      # 5️⃣ Upload artifact to Nexus
       - name: Upload artifact to Nexus
         shell: powershell
         env:
@@ -70,13 +78,14 @@ jobs:
           $serverZip = "full-repo-$version.zip"
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
+          if (Test-Path $serverZip) { Remove-Item $serverZip -Force }
           Compress-Archive -Path "build_output/*" -DestinationPath $serverZip -Force
           $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/$version/$serverZip"
           Write-Host "[INFO] Uploading $serverZip to Nexus → $serverUrl"
           Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $serverZip -Headers $headers -ContentType "application/zip"
           Write-Host "✅ Artifact uploaded successfully."
 
-      # 5️⃣ Download & unzip latest artifact
+      # 6️⃣ Download & unzip latest artifact from Nexus
       - name: Download & unzip latest artifact from Nexus
         shell: powershell
         env:
@@ -88,6 +97,7 @@ jobs:
         run: |
           Write-Host "[INFO] Starting artifact download..."
           if (Test-Path $env:DEPLOY_PATH) {
+              Write-Host "[INFO] Clearing old files from $env:DEPLOY_PATH..."
               Remove-Item -Path "$env:DEPLOY_PATH\*" -Recurse -Force
           } else {
               New-Item -ItemType Directory -Path $env:DEPLOY_PATH -Force | Out-Null
@@ -103,13 +113,25 @@ jobs:
           $latest = $response.items | Sort-Object { $_.version } -Descending | Select-Object -First 1
           $latestVersion = $latest.version
           $zipDownloadUrl = $latest.assets[0].downloadUrl
+          Write-Host "[INFO] Latest version: $latestVersion"
           $zipFilePath = Join-Path $env:DEPLOY_PATH "full-repo-$latestVersion.zip"
           Write-Host "[INFO] Downloading ZIP to $zipFilePath ..."
           Invoke-WebRequest -Uri $zipDownloadUrl -OutFile $zipFilePath -Headers $headers
           Expand-Archive -Path $zipFilePath -DestinationPath $env:DEPLOY_PATH -Force
           Write-Host "✅ Artifact downloaded and extracted successfully."
 
-      # 6️⃣ Deploy to IIS
+      # 6.1️⃣ Install backend dependencies on deployment server
+      - name: Install backend dependencies
+        shell: powershell
+        env:
+          DEPLOY_PATH: C:\SSDLC\Nexus_Unzips
+        run: |
+          Write-Host "[INFO] Installing backend dependencies (production only)..."
+          cd $env:DEPLOY_PATH
+          npm install --production
+          Write-Host "✅ Backend dependencies installed successfully."
+
+      # 7️⃣ Deploy to IIS
       - name: Deploy to IIS
         shell: powershell
         env:
@@ -130,19 +152,12 @@ jobs:
               New-WebAppPool -Name $env:IIS_APPPOOL | Out-Null
               Set-ItemProperty "IIS:\AppPools\$env:IIS_APPPOOL" -Name processModel.identityType -Value "ApplicationPoolIdentity"
           }
+          if (-not (Test-Path "IIS:\Sites\$env:IIS_SITE")) {
+              New-Website -Name $env:IIS_SITE -PhysicalPath $env:DEPLOY_TARGET -Port 80 -Force | Out-Null
+          }
           Set-ItemProperty "IIS:\Sites\$env:IIS_SITE" -Name applicationPool -Value $env:IIS_APPPOOL
           Restart-WebAppPool -Name $env:IIS_APPPOOL
           Write-Host "✅ IIS Deployment completed successfully!"
-
-      # 7️⃣ Start Node.js server from artifact
-      - name: Start Node.js server
-        shell: powershell
-        run: |
-          Write-Host "[INFO] Starting server from extracted artifact..."
-          cd C:\SSDLC\Nexus_Unzips
-          Start-Process "cmd.exe" -ArgumentList "/c node build/app" -NoNewWindow
-          Write-Host "[INFO] Waiting 25 seconds for server to be ready..."
-          Start-Sleep -Seconds 25
 
       # 8️⃣ Run OWASP ZAP Scan
       - name: Run OWASP ZAP Scan
@@ -151,8 +166,11 @@ jobs:
           ZAP_PATH: C:\SSDLC\ZAP_2_16_1_windows.exe
           ZAP_REPORT_PATH: C:\SSDLC\ZapScan_Reports
         run: |
+          cd C:\SSDLC\Nexus_Unzips
+          Start-Process "cmd.exe" -ArgumentList "/c npm start" -NoNewWindow
+          Start-Sleep -Seconds 25
           if (-Not (Test-Path $env:ZAP_REPORT_PATH)) { New-Item -ItemType Directory -Path $env:ZAP_REPORT_PATH | Out-Null }
           $timestamp = Get-Date -Format "yyyyMMddHHmmss"
           $reportFile = Join-Path $env:ZAP_REPORT_PATH "ZapReport_$timestamp.html"
           Start-Process -FilePath $env:ZAP_PATH -ArgumentList "-cmd", "-quickurl", "http://localhost:3000", "-quickout", $reportFile, "-quickprogress"
-          Write-Host "[INFO] ZAP scan started, report will be at $reportFile"
+          Start-Sleep -Seconds 180
