@@ -167,23 +167,27 @@ jobs:
           Expand-Archive -Path $zipFilePath -DestinationPath $env:DEPLOY_PATH -Force
           Write-Host "✅ Artifact downloaded and extracted successfully."
 
-      # 🔐 Generate encryption keys if missing
+      # 9️⃣a Generate encryption keys if missing
       - name: Generate encryption keys if missing
         shell: powershell
         run: |
-          $keyDir = "C:\SSDLC\Nexus_Unzips\encryptionkeys"
-          if (-Not (Test-Path $keyDir)) {
-            Write-Host "[INFO] Creating encryptionkeys directory..."
-            New-Item -ItemType Directory -Force -Path $keyDir | Out-Null
-          }
-          if (-Not (Test-Path "$keyDir\jwt.key") -or -Not (Test-Path "$keyDir\jwt.pub")) {
-            Write-Host "[INFO] Generating RSA key pair for JWT..."
-            node -e "const fs=require('fs');const {generateKeyPairSync}=require('crypto');const {publicKey,privateKey}=generateKeyPairSync('rsa',{modulusLength:2048,publicKeyEncoding:{type:'spki',format:'pem'},privateKeyEncoding:{type:'pkcs8',format:'pem'}});fs.writeFileSync('$keyDir\\jwt.pub',publicKey);fs.writeFileSync('$keyDir\\jwt.key',privateKey);"
+          $keyFolder = "C:\SSDLC\Nexus_Unzips\encryptionkeys"
+          if (-Not (Test-Path $keyFolder)) { New-Item -ItemType Directory -Path $keyFolder -Force | Out-Null }
+          if (-Not (Test-Path "$keyFolder\jwt.key") -or -Not (Test-Path "$keyFolder\jwt.pub")) {
+              Write-Host "[INFO] Generating RSA 2048-bit JWT key pair..."
+              node -e "
+              const { generateKeyPairSync } = require('crypto');
+              const fs = require('fs');
+              const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+              fs.writeFileSync('$keyFolder/jwt.key', privateKey.export({ type: 'pkcs1', format: 'pem' }));
+              fs.writeFileSync('$keyFolder/jwt.pub', publicKey.export({ type: 'spki', format: 'pem' }));
+              "
+              Write-Host "[INFO] JWT key pair generated."
           } else {
-            Write-Host "[INFO] Encryption keys already exist. Skipping generation."
+              Write-Host "[INFO] JWT keys already exist, skipping generation."
           }
 
-      # 🔟 Start Node.js server (ignoring postinstall scripts)
+      # 🔟 Start Node.js server
       - name: Start Node.js server
         shell: powershell
         run: |
