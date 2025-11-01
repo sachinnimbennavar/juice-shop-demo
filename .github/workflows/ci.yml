@@ -73,7 +73,7 @@ jobs:
               Write-Host "[INFO] Skipping frontend build (cached output found)."
           }
 
-      # 6️⃣ Compile backend TypeScript (tolerate minor TS errors)
+      # 6️⃣ Compile backend TypeScript (ignore minor TS errors like TS7006)
       - name: Compile backend TypeScript
         shell: powershell
         run: |
@@ -92,10 +92,12 @@ jobs:
           $artifactFolder = "build_output"
           if (Test-Path $artifactFolder) { Remove-Item -Recurse -Force $artifactFolder }
           New-Item -ItemType Directory -Path $artifactFolder | Out-Null
+
           Write-Host "[INFO] Removing all node_modules folders..."
           Get-ChildItem -Path "." -Directory -Recurse -Force |
             Where-Object { $_.Name -eq "node_modules" } |
             ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+
           $requiredItems = @("frontend/dist/frontend","build","package.json")
           foreach ($item in $requiredItems) {
               if (Test-Path $item) {
@@ -108,6 +110,7 @@ jobs:
                   exit 1
               }
           }
+
           $optionalItem = "web.config"
           if (Test-Path $optionalItem) {
               $dest = Join-Path $artifactFolder $optionalItem
@@ -130,9 +133,12 @@ jobs:
           $serverZip = "full-repo-$version.zip"
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
+
           if (Test-Path $serverZip) { Remove-Item $serverZip -Force }
+
           Compress-Archive -Path "build_output/*" -DestinationPath $serverZip -Force
           $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/$version/$serverZip"
+
           Write-Host "[INFO] Uploading $serverZip to Nexus → $serverUrl"
           Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $serverZip -Headers $headers -ContentType "application/zip"
           Write-Host "✅ Artifact uploaded successfully."
@@ -154,40 +160,40 @@ jobs:
           } else {
               New-Item -ItemType Directory -Path $env:DEPLOY_PATH -Force | Out-Null
           }
+
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
+
           $searchUrl = "${env:NEXUS_URL}/service/rest/v1/search?repository=${env:NEXUS_REPO}&group=com.example.juiceshop&name=full-repo"
           $response = Invoke-RestMethod -Uri $searchUrl -Headers $headers -Method Get
           $latest = $response.items | Sort-Object { $_.version } -Descending | Select-Object -First 1
           $latestVersion = $latest.version
           $zipDownloadUrl = $latest.assets[0].downloadUrl
           $zipFilePath = Join-Path $env:DEPLOY_PATH "full-repo-$latestVersion.zip"
+
           Write-Host "[INFO] Downloading ZIP to $zipFilePath ..."
           Invoke-WebRequest -Uri $zipDownloadUrl -OutFile $zipFilePath -Headers $headers
+
           Expand-Archive -Path $zipFilePath -DestinationPath $env:DEPLOY_PATH -Force
           Write-Host "✅ Artifact downloaded and extracted successfully."
 
-      # 9️⃣a Generate encryption keys if missing
+      # 🔐 NEW STEP — Generate encryption keys if missing
       - name: Generate encryption keys if missing
         shell: powershell
         run: |
-          $keyFolder = "C:\SSDLC\Nexus_Unzips\encryptionkeys"
-          if (-Not (Test-Path $keyFolder)) { New-Item -ItemType Directory -Path $keyFolder -Force | Out-Null }
-          if (-Not (Test-Path "$keyFolder\jwt.key") -or -Not (Test-Path "$keyFolder\jwt.pub")) {
-              Write-Host "[INFO] Generating RSA 2048-bit JWT key pair..."
-              node -e "
-              const { generateKeyPairSync } = require('crypto');
-              const fs = require('fs');
-              const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
-              fs.writeFileSync('$keyFolder/jwt.key', privateKey.export({ type: 'pkcs1', format: 'pem' }));
-              fs.writeFileSync('$keyFolder/jwt.pub', publicKey.export({ type: 'spki', format: 'pem' }));
-              "
-              Write-Host "[INFO] JWT key pair generated."
+          Write-Host "[INFO] Checking encryption key files..."
+          $keyDir = "C:\SSDLC\Nexus_Unzips\encryptionkeys"
+          if (!(Test-Path $keyDir)) { New-Item -ItemType Directory -Path $keyDir -Force | Out-Null }
+          $privKey = Join-Path $keyDir "jwt.key"
+          $pubKey = Join-Path $keyDir "jwt.pub"
+          if ((Test-Path $privKey) -and (Test-Path $pubKey)) {
+              Write-Host "[INFO] Encryption keys already exist."
           } else {
-              Write-Host "[INFO] JWT keys already exist, skipping generation."
+              Write-Host "[INFO] Generating RSA 2048-bit keys..."
+              node -e "const { generateKeyPairSync, writeFileSync } = require('crypto'); const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048, publicKeyEncoding: { type: 'spki', format: 'pem' }, privateKeyEncoding: { type: 'pkcs8', format: 'pem' } }); writeFileSync('$privKey', privateKey); writeFileSync('$pubKey', publicKey); console.log('Keys generated successfully.');"
           }
 
-      # 🔟 Start Node.js server
+      # 🔟 Start Node.js server (ignoring postinstall scripts)
       - name: Start Node.js server
         shell: powershell
         run: |
