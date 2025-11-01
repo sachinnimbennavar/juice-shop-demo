@@ -10,40 +10,68 @@ jobs:
 
     steps:
       # 1️⃣ Ultra-Fast Checkout (minimal)
-      - name: Checkout repository (ultra fast)
+      - name: Checkout repository (ultra-fast)
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+          lfs: false
+          submodules: false
+          clean: false
+          persist-credentials: false
 
-      # 2️⃣ Set Node memory
-      - name: Set Node memory
-        run: set NODE_OPTIONS=--max_old_space_size=4096
-
-      # 3️⃣ Setup Node.js (LTS)
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      # 2️⃣ Cache dependencies + frontend build
+      - name: Cache dependencies + frontend build
+        uses: actions/cache@v4
         with:
-          node-version: "22"
-          cache: "npm"
+          path: |
+            node_modules
+            frontend/node_modules
+            frontend/dist
+          key: ${{ runner.os }}-juiceshop-${{ hashFiles('package-lock.json', 'frontend/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-juiceshop-
 
-      # 4️⃣ Install backend dependencies only (fast)
-      - name: Install backend dependencies
+      # 3️⃣ Install backend dependencies (first-time only)
+      - name: Install backend dependencies (first-time only)
         shell: powershell
         run: |
           if (-Not (Test-Path "node_modules")) {
               Write-Host "[INFO] Installing backend dependencies..."
-              npm ci --ignore-scripts --prefer-offline --no-audit
+              npm install --prefer-offline --no-audit
           } else {
-              Write-Host "[INFO] node_modules already exists, skipping npm ci."
+              Write-Host "[INFO] Skipping backend install (already present)."
           }
 
-      # 5️⃣ Verify essential files
-      - name: Verify essential files
+      # 4️⃣ Install frontend dependencies (first-time only)
+      - name: Install frontend dependencies (first-time only)
         shell: powershell
         run: |
-          if (-Not (Test-Path "package.json")) { Write-Error "package.json not found" }
-          if (-Not (Test-Path "server.js")) { Write-Error "server.js not found" }
-          Write-Host "[INFO] Essential files verified successfully."
+          if (-Not (Test-Path "frontend/node_modules")) {
+              Write-Host "[INFO] Installing frontend dependencies..."
+              cd frontend
+              npm install --legacy-peer-deps --prefer-offline --no-audit
+              cd ..
+          } else {
+              Write-Host "[INFO] Skipping frontend install (already present)."
+          }
+
+      # 💡 Increase Node memory before Angular build
+      - name: Set Node memory
+        shell: powershell
+        run: setx NODE_OPTIONS "--max_old_space_size=4096"
+
+      # 5️⃣ Build frontend (first-time only)
+      - name: Build frontend (first-time only)
+        shell: powershell
+        run: |
+          if (-Not (Test-Path "frontend/dist/frontend")) {
+              Write-Host "[INFO] Building Angular frontend..."
+              cd frontend
+              npm run build -- --configuration production --watch=false
+              cd ..
+          } else {
+              Write-Host "[INFO] Skipping frontend build (cached output found)."
+          }
 
       # 6️⃣ Compile backend TypeScript (ignore TS errors safely)
       - name: Compile backend TypeScript
@@ -66,58 +94,129 @@ jobs:
           Write-Host "[INFO] Forcing successful exit code to bypass TypeScript warnings."
           exit 0
 
-      # 7️⃣ Run OWASP ZAP scan (lightweight mode)
-      - name: Run OWASP ZAP Baseline Scan
-        shell: bash
-        continue-on-error: true
-        run: |
-          echo "[INFO] Starting OWASP ZAP baseline scan..."
-          docker run --rm -v $(pwd):/zap/wrk/:rw ghcr.io/zaproxy/zaproxy:stable \
-            zap-baseline.py -t http://localhost:3000 -r zap_report.html || true
-          echo "[INFO] OWASP ZAP scan completed."
-
-      # 8️⃣ Prepare deployment artifact
-      - name: Prepare deployment artifact
+      # 7️⃣ Prepare deployment artifact (excluding node_modules)
+      - name: Prepare deployment artifact (excluding node_modules)
         shell: powershell
         run: |
-          Write-Host "[INFO] Preparing deployment artifact..."
-          $artifactDir = "$env:RUNNER_TEMP\juice-shop-artifact"
-          if (Test-Path $artifactDir) { Remove-Item $artifactDir -Recurse -Force }
-          New-Item -ItemType Directory -Path $artifactDir | Out-Null
-          Copy-Item -Path * -Destination $artifactDir -Recurse
-          Write-Host "[INFO] Artifact prepared successfully."
+          Write-Host "[INFO] Preparing deployment artifact (excluding node_modules)..."
+          $artifactFolder = "build_output"
+          if (Test-Path $artifactFolder) { Remove-Item -Recurse -Force $artifactFolder }
+          New-Item -ItemType Directory -Path $artifactFolder | Out-Null
+          Write-Host "[INFO] Removing all node_modules folders..."
+          Get-ChildItem -Path "." -Directory -Recurse -Force |
+            Where-Object { $_.Name -eq "node_modules" } |
+            ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+          $requiredItems = @("frontend/dist/frontend","build","package.json")
+          foreach ($item in $requiredItems) {
+              if (Test-Path $item) {
+                  $dest = Join-Path $artifactFolder $item
+                  $destDir = Split-Path $dest
+                  if (!(Test-Path $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
+                  Copy-Item -Path $item -Destination $dest -Recurse -Force
+              } else {
+                  Write-Host "[ERROR] Required item missing: $item"
+                  exit 1
+              }
+          }
+          $optionalItem = "web.config"
+          if (Test-Path $optionalItem) {
+              $dest = Join-Path $artifactFolder $optionalItem
+              Copy-Item -Path $optionalItem -Destination $dest -Force
+              Write-Host "[INFO] Optional item included: $optionalItem"
+          } else {
+              Write-Host "[INFO] Optional item missing, skipping: $optionalItem"
+          }
+          Write-Host "[INFO] Artifact ready at $artifactFolder"
 
-      # 9️⃣ Create & Upload Full Repo ZIP to Nexus
-      - name: 📦 Create & Upload Full Repo ZIP to Nexus
+      # 8️⃣ Upload artifact to Nexus
+      - name: Upload artifact to Nexus
         shell: powershell
         env:
-          NEXUS_URL: ${{ secrets.NEXUS_URL }}
+          NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
-          $version = (Get-Date -Format "yyyyMMdd-HHmmss")
-          $zipPath = "C:\SSDLC\juice-shop-$version.zip"
-          if (Test-Path "C:\SSDLC\juice-shop-*.zip") { Remove-Item "C:\SSDLC\juice-shop-*.zip" -Force }
-          Compress-Archive -Path * -DestinationPath $zipPath
-          Write-Host "[INFO] Uploading ZIP to Nexus..."
-          $pair = "$env:NEXUS_USERNAME`:$env:NEXUS_PASSWORD"
-          $encoded = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($pair))
-          Invoke-RestMethod -Uri "$env:NEXUS_URL/repository/juice-shop/$($zipPath | Split-Path -Leaf)" `
-              -Method Put -InFile $zipPath -Headers @{Authorization=("Basic {0}" -f $encoded)}
-          Write-Host "[INFO] Upload successful to Nexus at $env:NEXUS_URL"
+          $version = (Get-Date -Format "yyyyMMddHHmmss")
+          $serverZip = "full-repo-$version.zip"
+          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
+          $headers = @{ Authorization = "Basic $base64Auth" }
+          if (Test-Path $serverZip) { Remove-Item $serverZip -Force }
+          Compress-Archive -Path "build_output/*" -DestinationPath $serverZip -Force
+          $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/$version/$serverZip"
+          Write-Host "[INFO] Uploading $serverZip to Nexus -> $serverUrl"
+          Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $serverZip -Headers $headers -ContentType "application/zip"
+          Write-Host "[INFO] Artifact uploaded successfully."
 
-      # 🔟 Deploy to IIS (Frontend)
-      - name: 🚀 Deploy to IIS (Frontend)
+      # 9️⃣ Download & unzip latest artifact from Nexus
+      - name: Download & unzip latest artifact from Nexus
+        shell: powershell
+        env:
+          NEXUS_URL: http://127.0.0.1:8081
+          NEXUS_REPO: JuiceShopMavenDemo
+          DEPLOY_PATH: C:\SSDLC\Nexus_Unzips
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+        run: |
+          Write-Host "[INFO] Starting artifact download..."
+          if (Test-Path $env:DEPLOY_PATH) {
+              Write-Host "[INFO] Clearing old files from $env:DEPLOY_PATH..."
+              Remove-Item -Path "$env:DEPLOY_PATH\*" -Recurse -Force
+          } else {
+              New-Item -ItemType Directory -Path $env:DEPLOY_PATH -Force | Out-Null
+          }
+          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
+          $headers = @{ Authorization = "Basic $base64Auth" }
+          $searchUrl = "${env:NEXUS_URL}/service/rest/v1/search?repository=${env:NEXUS_REPO}&group=com.example.juiceshop&name=full-repo"
+          $response = Invoke-RestMethod -Uri $searchUrl -Headers $headers -Method Get
+          if (-not $response.items) {
+              Write-Error "No artifacts found in Nexus repository ${env:NEXUS_REPO}."
+              exit 1
+          }
+          $latest = $response.items | Sort-Object { $_.version } -Descending | Select-Object -First 1
+          $latestVersion = $latest.version
+          $zipDownloadUrl = $latest.assets[0].downloadUrl
+          $zipFilePath = Join-Path $env:DEPLOY_PATH "full-repo-$latestVersion.zip"
+          Write-Host "[INFO] Downloading ZIP to $zipFilePath ..."
+          Invoke-WebRequest -Uri $zipDownloadUrl -OutFile $zipFilePath -Headers $headers
+          Expand-Archive -Path $zipFilePath -DestinationPath $env:DEPLOY_PATH -Force
+          Write-Host "[INFO] Artifact downloaded and extracted successfully."
+
+      # 🔐 Generate encryption keys if missing
+      - name: Generate encryption keys if missing
         shell: powershell
         run: |
-          $unzipPath = "C:\SSDLC\Nexus_Unzips"
-          if (Test-Path $unzipPath) { Remove-Item $unzipPath -Recurse -Force }
-          New-Item -ItemType Directory -Path $unzipPath | Out-Null
-          $latestZip = Get-ChildItem -Path "C:\SSDLC\" -Filter "juice-shop-*.zip" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-          if ($latestZip) {
-              Write-Host "[INFO] Unzipping $($latestZip.FullName) to $unzipPath ..."
-              Expand-Archive -Path $latestZip.FullName -DestinationPath $unzipPath -Force
+          $keyPath = "C:\SSDLC\Nexus_Unzips\encryptionkeys"
+          if (-Not (Test-Path $keyPath)) { New-Item -ItemType Directory -Path $keyPath -Force | Out-Null }
+          $privKey = Join-Path $keyPath "jwt.key"
+          $pubKey = Join-Path $keyPath "jwt.pub"
+          if (-Not (Test-Path $privKey) -or -Not (Test-Path $pubKey)) {
+              Write-Host "[INFO] Generating RSA key pair..."
+              node -e "
+                const fs = require('fs');
+                const crypto = require('crypto');
+                const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+                fs.writeFileSync('$privKey', privateKey.export({ type: 'pkcs1', format: 'pem' }));
+                fs.writeFileSync('$pubKey', publicKey.export({ type: 'pkcs1', format: 'pem' }));
+              "
+              Write-Host "[INFO] Encryption keys generated."
           } else {
-              Write-Error "No ZIP file found for deployment."
+              Write-Host "[INFO] Encryption keys already exist. Skipping generation."
           }
-          Write-Host "[INFO] Deployment to IIS completed successfully."
+
+      # 🔟 Start Node.js server
+      - name: Start Node.js server
+        shell: powershell
+        run: |
+          Write-Host "[INFO] Starting Node.js server from extracted artifact..."
+          cd C:\SSDLC\Nexus_Unzips
+          Write-Host "[INFO] Installing dependencies (ignoring postinstall scripts)..."
+          npm install --prefer-offline --no-audit --ignore-scripts
+          if (-Not (Test-Path "build/app.js")) {
+              Write-Host "[ERROR] build/app.js missing after unzip. Cannot start server."
+              exit 1
+          }
+          Write-Host "[INFO] Launching server..."
+          Start-Process "node" -ArgumentList "build/app.js" -NoNewWindow
+          Write-Host "[INFO] Waiting 25 seconds for server to be ready..."
+          Start-Sleep -Seconds 25
+          Write-Host "[INFO] Node.js server should be running at http://localhost:3000"
