@@ -1,10 +1,88 @@
-# .github/workflows/test.yml
-name: Test Workflow Dispatch
+name: Juice Shop CI/CD Test
+
 on:
   workflow_dispatch:
 
 jobs:
-  test:
+  build-upload-deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
+
     steps:
-      - run: echo "Hello World"
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            frontend/node_modules
+            frontend/dist
+            dist
+          key: ${{ runner.os }}-juiceshop-${{ hashFiles('package-lock.json', 'frontend/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-juiceshop-
+
+      - name: Install backend dependencies
+        shell: bash
+        run: |
+          if [ ! -d "node_modules" ]; then
+            echo "[INFO] Installing backend dependencies..."
+            npm install --prefer-offline --no-audit
+          else
+            echo "[INFO] Backend dependencies already installed."
+          fi
+
+      - name: Install frontend dependencies
+        shell: bash
+        run: |
+          if [ ! -d "frontend/node_modules" ]; then
+            echo "[INFO] Installing frontend dependencies..."
+            cd frontend
+            npm install --legacy-peer-deps --prefer-offline --no-audit
+            cd ..
+          else
+            echo "[INFO] Frontend dependencies already installed."
+          fi
+
+      - name: Build frontend
+        shell: bash
+        run: |
+          if [ ! -d "frontend/dist/frontend" ]; then
+            echo "[INFO] Building Angular frontend..."
+            cd frontend
+            npm run build -- --configuration production --watch=false
+            cd ..
+          else
+            echo "[INFO] Frontend already built."
+          fi
+
+      - name: Set Node memory
+        run: export NODE_OPTIONS=--max_old_space_size=4096
+
+      - name: Compile backend TypeScript
+        shell: bash
+        run: |
+          echo "[INFO] Compiling TypeScript backend..."
+          npx tsc
+          if [ ! -f "dist/server.js" ]; then
+            echo "[ERROR] Compilation failed, server.js not found."
+            exit 1
+          fi
+
+      - name: Prepare deployment artifact
+        shell: bash
+        run: |
+          ARTIFACT_FOLDER="build_output"
+          rm -rf $ARTIFACT_FOLDER
+          mkdir -p $ARTIFACT_FOLDER
+          FILES_TO_INCLUDE=("frontend/dist/frontend" "dist" "package.json" "web.config")
+          for ITEM in "${FILES_TO_INCLUDE[@]}"; do
+            if [ -e "$ITEM" ]; then
+              cp -r "$ITEM" "$ARTIFACT_FOLDER/"
+            fi
+          done
+          echo "[INFO] Artifact prepared at $ARTIFACT_FOLDER"
