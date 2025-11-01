@@ -87,8 +87,10 @@ jobs:
           $artifactFolder = "build_output"
           if (Test-Path $artifactFolder) { Remove-Item -Recurse -Force $artifactFolder }
           New-Item -ItemType Directory -Path $artifactFolder | Out-Null
-
-          # Required items
+          Write-Host "[INFO] Removing all node_modules folders..."
+          Get-ChildItem -Path "." -Directory -Recurse -Force |
+            Where-Object { $_.Name -eq "node_modules" } |
+            ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
           $requiredItems = @("frontend/dist/frontend","build","package.json")
           foreach ($item in $requiredItems) {
               if (Test-Path $item) {
@@ -101,25 +103,14 @@ jobs:
                   exit 1
               }
           }
-
-          # Optional web.config
           $optionalItem = "web.config"
           if (Test-Path $optionalItem) {
-              Copy-Item -Path $optionalItem -Destination (Join-Path $artifactFolder $optionalItem) -Force
+              $dest = Join-Path $artifactFolder $optionalItem
+              Copy-Item -Path $optionalItem -Destination $dest -Force
               Write-Host "[INFO] Optional item included: $optionalItem"
           } else {
               Write-Host "[INFO] Optional item missing, skipping: $optionalItem"
           }
-
-          # Pre-check for build/app.js
-          $requiredFile = "build/app.js"
-          if (-Not (Test-Path $requiredFile)) {
-              Write-Host "[ERROR] Required backend build file missing: $requiredFile"
-              exit 1
-          } else {
-              Write-Host "[INFO] Found required file: $requiredFile"
-          }
-
           Write-Host "[INFO] Artifact ready at $artifactFolder"
 
       # 8️⃣ Upload artifact to Nexus
@@ -158,43 +149,32 @@ jobs:
           } else {
               New-Item -ItemType Directory -Path $env:DEPLOY_PATH -Force | Out-Null
           }
-
           $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
           $headers = @{ Authorization = "Basic $base64Auth" }
-
           $searchUrl = "${env:NEXUS_URL}/service/rest/v1/search?repository=${env:NEXUS_REPO}&group=com.example.juiceshop&name=full-repo"
           $response = Invoke-RestMethod -Uri $searchUrl -Headers $headers -Method Get
-          if ($null -eq $response.items -or $response.items.Count -eq 0) {
-              Write-Host "[ERROR] No full-repo versions found in Nexus!"
-              exit 1
-          }
-
           $latest = $response.items | Sort-Object { $_.version } -Descending | Select-Object -First 1
           $latestVersion = $latest.version
           $zipDownloadUrl = $latest.assets[0].downloadUrl
-
-          Write-Host "[INFO] Latest version: $latestVersion"
           $zipFilePath = Join-Path $env:DEPLOY_PATH "full-repo-$latestVersion.zip"
           Write-Host "[INFO] Downloading ZIP to $zipFilePath ..."
           Invoke-WebRequest -Uri $zipDownloadUrl -OutFile $zipFilePath -Headers $headers
           Expand-Archive -Path $zipFilePath -DestinationPath $env:DEPLOY_PATH -Force
           Write-Host "✅ Artifact downloaded and extracted successfully."
 
-      # 🔟 Start Node.js server from extracted artifact
+      # 🔟 Start Node.js server (ignoring postinstall scripts)
       - name: Start Node.js server
         shell: powershell
         run: |
           Write-Host "[INFO] Starting Node.js server from extracted artifact..."
           cd C:\SSDLC\Nexus_Unzips
+          Write-Host "[INFO] Installing dependencies (ignoring postinstall scripts)..."
+          npm install --prefer-offline --no-audit --ignore-scripts
           if (-Not (Test-Path "build/app.js")) {
-              Write-Host "[ERROR] build/app.js missing, cannot start server"
+              Write-Host "[ERROR] build/app.js missing after unzip. Cannot start server."
               exit 1
           }
-
-          Write-Host "[INFO] Installing dependencies (without postinstall scripts)..."
-          npm install --prefer-offline --no-audit --ignore-scripts
-
-          Write-Host "[INFO] Starting Node.js server..."
+          Write-Host "[INFO] Launching server..."
           Start-Process "node" -ArgumentList "build/app.js" -NoNewWindow
           Write-Host "[INFO] Waiting 25 seconds for server to be ready..."
           Start-Sleep -Seconds 25
