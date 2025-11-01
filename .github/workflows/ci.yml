@@ -162,6 +162,22 @@ jobs:
           Expand-Archive -Path $zipFilePath -DestinationPath $env:DEPLOY_PATH -Force
           Write-Host "✅ Artifact downloaded and extracted successfully."
 
+      # 🧩 NEW STEP — Generate encryption keys if missing
+      - name: Generate encryption keys if missing
+        shell: powershell
+        run: |
+          $keyDir = "C:\SSDLC\Nexus_Unzips\encryptionkeys"
+          if (-Not (Test-Path $keyDir)) {
+            Write-Host "[INFO] Creating encryptionkeys directory..."
+            New-Item -ItemType Directory -Force -Path $keyDir | Out-Null
+          }
+          if (-Not ((Test-Path "$keyDir\jwt.key") -and (Test-Path "$keyDir\jwt.pub"))) {
+            Write-Host "[INFO] Generating RSA key pair for JWT..."
+            node -e "const fs=require('fs');const {generateKeyPairSync}=require('crypto');const {publicKey,privateKey}=generateKeyPairSync('rsa',{modulusLength:2048,publicKeyEncoding:{type:'spki',format:'pem'},privateKeyEncoding:{type:'pkcs8',format:'pem'}});fs.writeFileSync('$keyDir\\jwt.pub',publicKey);fs.writeFileSync('$keyDir\\jwt.key',privateKey);"
+          } else {
+            Write-Host "[INFO] Encryption keys already exist. Skipping generation."
+          }
+
       # 🔟 Start Node.js server (ignoring postinstall scripts)
       - name: Start Node.js server
         shell: powershell
