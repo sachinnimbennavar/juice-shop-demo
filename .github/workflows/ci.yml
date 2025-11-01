@@ -1,19 +1,24 @@
-name: Juice Shop CI/CD Test
+name: Juice Shop Full CI/CD Pipeline (TypeScript + OWASP ZAP Scan)
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
   build-upload-deploy:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+    runs-on: self-hosted
+    timeout-minutes: 180
 
     steps:
+      # 1. Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
+      # 2. Cache frontend & backend dependencies
       - name: Cache dependencies
         uses: actions/cache@v4
         with:
@@ -26,63 +31,139 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-juiceshop-
 
+      # 3. Install backend dependencies
       - name: Install backend dependencies
-        shell: bash
+        shell: powershell
         run: |
-          if [ ! -d "node_modules" ]; then
-            echo "[INFO] Installing backend dependencies..."
-            npm install --prefer-offline --no-audit
-          else
-            echo "[INFO] Backend dependencies already installed."
-          fi
+          if (-Not (Test-Path "node_modules")) {
+              Write-Host "[INFO] Installing backend dependencies..."
+              npm install --prefer-offline --no-audit
+          }
 
+      # 4. Install frontend dependencies
       - name: Install frontend dependencies
-        shell: bash
+        shell: powershell
         run: |
-          if [ ! -d "frontend/node_modules" ]; then
-            echo "[INFO] Installing frontend dependencies..."
-            cd frontend
-            npm install --legacy-peer-deps --prefer-offline --no-audit
-            cd ..
-          else
-            echo "[INFO] Frontend dependencies already installed."
-          fi
+          if (-Not (Test-Path "frontend/node_modules")) {
+              Write-Host "[INFO] Installing frontend dependencies..."
+              cd frontend
+              npm install --legacy-peer-deps --prefer-offline --no-audit
+              cd ..
+          }
 
+      # 5. Build frontend
       - name: Build frontend
-        shell: bash
+        shell: powershell
         run: |
-          if [ ! -d "frontend/dist/frontend" ]; then
-            echo "[INFO] Building Angular frontend..."
-            cd frontend
-            npm run build -- --configuration production --watch=false
-            cd ..
-          else
-            echo "[INFO] Frontend already built."
-          fi
+          if (-Not (Test-Path "frontend/dist/frontend")) {
+              Write-Host "[INFO] Building Angular frontend..."
+              cd frontend
+              npm run build -- --configuration production --watch=false
+              cd ..
+          }
 
+      # 6. Set Node memory for backend build
       - name: Set Node memory
-        run: export NODE_OPTIONS=--max_old_space_size=4096
+        run: set NODE_OPTIONS=--max_old_space_size=4096
 
+      # 7. Compile backend TypeScript
       - name: Compile backend TypeScript
-        shell: bash
+        shell: powershell
         run: |
-          echo "[INFO] Compiling TypeScript backend..."
+          Write-Host "[INFO] Compiling TypeScript backend..."
           npx tsc
-          if [ ! -f "dist/server.js" ]; then
-            echo "[ERROR] Compilation failed, server.js not found."
-            exit 1
-          fi
+          if (-Not (Test-Path "dist/server.js")) {
+              Write-Host "[ERROR] Compilation failed, server.js not found in dist"
+              exit 1
+          }
 
+      # 8. Prepare deployment artifact
       - name: Prepare deployment artifact
-        shell: bash
+        shell: powershell
         run: |
-          ARTIFACT_FOLDER="build_output"
-          rm -rf $ARTIFACT_FOLDER
-          mkdir -p $ARTIFACT_FOLDER
-          FILES_TO_INCLUDE=("frontend/dist/frontend" "dist" "package.json" "web.config")
-          for ITEM in "${FILES_TO_INCLUDE[@]}"; do
-            if [ -e "$ITEM" ]; then
-              cp -r "$ITEM" "$ARTIFACT_FOLDER/"
-            fi
-          done
-          echo "[INFO] Artifact prepared at $ARTIFACT_FOLDER"
+          $artifactFolder = "build_output"
+          if (Test-Path $artifactFolder) { Remove-Item -Recurse -Force $artifactFolder }
+          New-Item -ItemType Directory -Path $artifactFolder | Out-Null
+          $filesToInclude = @("frontend/dist/frontend","dist","package.json","web.config")
+          foreach ($item in $filesToInclude) {
+              if (Test-Path $item) {
+                  $dest = Join-Path $artifactFolder $item
+                  $destDir = Split-Path $dest
+                  if (!(Test-Path $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
+                  Copy-Item -Path $item -Destination $dest -Recurse -Force
+              }
+          }
+
+      # 9. Upload artifact to Nexus
+      - name: Upload artifact to Nexus
+        shell: powershell
+        env:
+          NEXUS_URL: http://127.0.0.1:8081/repository/JuiceShopMavenDemo
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+        run: |
+          $version = (Get-Date -Format "yyyyMMddHHmmss")
+          $serverZip = "full-repo-$version.zip"
+          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
+          $headers = @{ Authorization = "Basic $base64Auth" }
+          Compress-Archive -Path "build_output/*" -DestinationPath $serverZip -Force
+          $serverUrl = "${env:NEXUS_URL}/com/example/juiceshop/full-repo/$version/$serverZip"
+          Invoke-RestMethod -Uri $serverUrl -Method Put -InFile $serverZip -Headers $headers -ContentType "application/zip"
+
+      # 10. Download & unzip latest artifact
+      - name: Download & unzip latest artifact
+        shell: powershell
+        env:
+          NEXUS_URL: http://127.0.0.1:8081
+          NEXUS_REPO: JuiceShopMavenDemo
+          DEPLOY_PATH: C:\SSDLC\Nexus_Unzips
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+        run: |
+          if (Test-Path $env:DEPLOY_PATH) { Remove-Item -Path "$env:DEPLOY_PATH\*" -Recurse -Force }
+          else { New-Item -ItemType Directory -Path $env:DEPLOY_PATH -Force | Out-Null }
+          $base64Auth = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("${env:NEXUS_USERNAME}:${env:NEXUS_PASSWORD}"))
+          $headers = @{ Authorization = "Basic $base64Auth" }
+          $searchUrl = "${env:NEXUS_URL}/service/rest/v1/search?repository=${env:NEXUS_REPO}&group=com.example.juiceshop&name=full-repo"
+          $response = Invoke-RestMethod -Uri $searchUrl -Headers $headers -Method Get
+          $latest = $response.items | Sort-Object { $_.version } -Descending | Select-Object -First 1
+          $latestVersion = $latest.version
+          $zipDownloadUrl = $latest.assets[0].downloadUrl
+          $zipFilePath = Join-Path $env:DEPLOY_PATH "full-repo-$latestVersion.zip"
+          Invoke-WebRequest -Uri $zipDownloadUrl -OutFile $zipFilePath -Headers $headers
+          Expand-Archive -Path $zipFilePath -DestinationPath $env:DEPLOY_PATH -Force
+
+      # 11. Deploy to IIS
+      - name: Deploy to IIS
+        shell: powershell
+        env:
+          DEPLOY_SOURCE: C:\SSDLC\Nexus_Unzips
+          DEPLOY_TARGET: C:\inetpub\wwwroot\JuiceShop
+          IIS_APPPOOL: JuiceShopAppPool
+          IIS_SITE: "Default Web Site"
+        run: |
+          Import-Module WebAdministration
+          if (Test-Path $env:DEPLOY_TARGET) { Remove-Item -Path "$env:DEPLOY_TARGET\*" -Recurse -Force }
+          Copy-Item -Path "$env:DEPLOY_SOURCE\*" -Destination $env:DEPLOY_TARGET -Recurse -Force
+          if (-not (Test-Path "IIS:\AppPools\$env:IIS_APPPOOL")) {
+              New-WebAppPool -Name $env:IIS_APPPOOL | Out-Null
+              Set-ItemProperty "IIS:\AppPools\$env:IIS_APPPOOL" -Name processModel.identityType -Value "ApplicationPoolIdentity"
+          }
+          Set-ItemProperty "IIS:\Sites\$env:IIS_SITE" -Name applicationPool -Value $env:IIS_APPPOOL
+          Restart-WebAppPool -Name $env:IIS_APPPOOL
+
+      # 12. Run OWASP ZAP Scan
+      - name: Run OWASP ZAP Scan
+        shell: powershell
+        env:
+          ZAP_PATH: C:\SSDLC\ZAP_2_16_1_windows.exe
+          ZAP_REPORT_PATH: C:\SSDLC\ZapScan_Reports
+        run: |
+          cd C:\SSDLC\Nexus_Unzips
+          Start-Process "cmd.exe" -ArgumentList "/c npm start" -NoNewWindow
+          Start-Sleep -Seconds 20
+          if (-Not (Test-Path $env:ZAP_REPORT_PATH)) { New-Item -ItemType Directory -Path $env:ZAP_REPORT_PATH | Out-Null }
+          $timestamp = Get-Date -Format "yyyyMMddHHmmss"
+          $reportFile = Join-Path $env:ZAP_REPORT_PATH "ZapReport_$timestamp.html"
+          Start-Process -FilePath $env:ZAP_PATH -ArgumentList "-cmd", "-quickurl", "http://localhost:3000", "-quickout", $reportFile, "-quickprogress"
+          Start-Sleep -Seconds 180
