@@ -13,6 +13,4 @@ jobs:
         run: |
           echo Launching OWASP ZAP using desktop shortcut...
           start "" "C:\Users\Public\Desktop\ZAP 2.16.1.lnk"
-          echo Waiting 2 minutes for ZAP to fully open...
-          timeout /t 120
-          echo ✅ ZAP application is now fully open.
+          echo ✅ ZAP should now be open.
