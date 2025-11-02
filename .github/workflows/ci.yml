@@ -1,16 +1,61 @@
-name: Open OWASP ZAP via Desktop Shortcut
+name: Open ZAP GUI and Run Scan via API
 
 on:
   workflow_dispatch:
 
 jobs:
-  open-zap:
+  zap-scan:
     runs-on: self-hosted
 
     steps:
-      - name: Launch OWASP ZAP via Desktop Shortcut
+      # 1️⃣ Launch ZAP GUI via desktop shortcut
+      - name: Launch OWASP ZAP GUI
         shell: cmd
         run: |
-          echo Launching OWASP ZAP using desktop shortcut...
+          echo Launching OWASP ZAP GUI...
           start "" "C:\Users\Public\Desktop\ZAP 2.16.1.lnk"
-          echo ✅ ZAP should now be open.
+          echo ✅ ZAP GUI launch initiated.
+
+      # 2️⃣ Wait until ZAP API responds
+      - name: Wait for ZAP to be ready
+        shell: powershell
+        run: |
+          $ZAP_API = "http://localhost:8082"  # Replace with your ZAP API port if different
+          Write-Host "Waiting for ZAP API to become available..."
+          do {
+              try {
+                  Invoke-WebRequest "$ZAP_API/JSON/core/view/version/" -UseBasicParsing -ErrorAction Stop | Out-Null
+                  $ready = $true
+              } catch {
+                  Write-Host "ZAP not ready yet, waiting 5 seconds..."
+                  Start-Sleep -Seconds 5
+                  $ready = $false
+              }
+          } while (-not $ready)
+          Write-Host "✅ ZAP is up and ready."
+
+      # 3️⃣ Trigger quick scan and download report
+      - name: Run Quick Scan and Download Report
+        shell: powershell
+        run: |
+          $ZAP_API = "http://localhost:8082"
+          $TARGET = "http://localhost:3000"
+          $REPORT_PATH = "C:\SSDLC\ZapScan_Reports\zap_report.html"
+
+          # Ensure report folder exists
+          if (-not (Test-Path "C:\SSDLC\ZapScan_Reports")) { New-Item -ItemType Directory -Path "C:\SSDLC\ZapScan_Reports" }
+
+          # Start quick scan
+          Write-Host "Starting ZAP quick scan on $TARGET..."
+          Invoke-WebRequest "$ZAP_API/JSON/ascan/action/scan/?url=$TARGET" | Out-Null
+
+          # Wait until scan completes
+          Write-Host "Waiting for scan to complete..."
+          do {
+              Start-Sleep -Seconds 5
+              $status = (Invoke-WebRequest "$ZAP_API/JSON/ascan/view/status/").Content | ConvertFrom-Json
+          } while ([int]$status.status -lt 100)
+
+          Write-Host "Scan complete. Downloading HTML report..."
+          Invoke-WebRequest "$ZAP_API/OTHER/core/other/htmlreport/" -OutFile $REPORT_PATH
+          Write-Host "✅ Report saved to $REPORT_PATH"
