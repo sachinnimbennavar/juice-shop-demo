@@ -17,22 +17,16 @@ jobs:
               Write-Host "ZAP is not running. Launching OWASP ZAP..."
               Start-Process "C:\Users\Public\Desktop\ZAP 2.16.1.lnk"
               Write-Host "Waiting 1 minute for ZAP to fully open..."
-              Start-Sleep -Seconds 100
+              Start-Sleep -Seconds 60
               Write-Host "✅ ZAP GUI should now be fully open."
           } else {
               Write-Host "ZAP is already running. Skipping launch."
           }
 
-      # 2️⃣ Trigger active scan on Juice Shop (localhost:3000) via ZAP API
-      - name: Trigger ZAP Scan
+      # 2️⃣ Instruction to manually scan Juice Shop
+      - name: Scan Juice Shop in ZAP GUI
         shell: powershell
         run: |
-          Write-Host "Starting scan for http://localhost:3000..."
-          # Run ZAP in daemon mode for automation
-          $zapPath = "C:\Program Files\OWASP\ZAP\zap.bat"
-          Start-Process $zapPath -ArgumentList "-daemon" -NoNewWindow
-          Start-Sleep -Seconds 10  # wait a bit for ZAP daemon to start
-
-          # Use ZAP CLI to start the scan
-          zap-cli --zap-url http://localhost:8080 --start-scanner --target http://localhost:3000
-          Write-Host "✅ Scan started. You can monitor progress in ZAP GUI or generate report manually."
+          Write-Host "⚠️ Juice Shop is already running at http://localhost:3000"
+          Write-Host "⚠️ Please switch to ZAP GUI and start an active scan manually."
+          Write-Host "Once scanning is complete, generate the report manually (Report -> Generate HTML Report)."
