@@ -1,25 +1,16 @@
-name: Test OWASP ZAP Scan
+name: Open OWASP ZAP GUI
 
 on:
   workflow_dispatch:
 
 jobs:
-  zap-scan:
+  open-zap:
     runs-on: self-hosted
 
     steps:
-      - name: Run OWASP ZAP Scan
+      - name: Launch OWASP ZAP GUI
         shell: cmd
         run: |
-          echo Running OWASP ZAP Scan...
-
-          rem Ensure the report folder exists
-          if not exist "C:\SSDLC\ZapScan_Reports" mkdir C:\SSDLC\ZapScan_Reports
-
-          rem Change directory to ZAP installation folder
-          cd /d "C:\Program Files\ZAP\Zed Attack Proxy"
-
-          rem Run quick scan using zap.bat
-          zap.bat -cmd -quickurl http://localhost:3000 -quickout C:\SSDLC\ZapScan_Reports\zap_report.html
-
-          echo ✅ OWASP ZAP scan completed. Report saved at C:\SSDLC\ZapScan_Reports\zap_report.html
+          echo Launching OWASP ZAP GUI...
+          start "" "C:\Program Files\ZAP\Zed Attack Proxy\ZAP.exe"
+          echo ✅ ZAP GUI should now be open.
