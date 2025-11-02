@@ -25,21 +25,23 @@ jobs:
 
           # Start the server in background
           Write-Host 'Launching npm start in background...'
-          Start-Process pwsh -ArgumentList "cd 'C:\SSDLC\Nexus_Unzips'; npm start" -WindowStyle Hidden
+          $proc = Start-Process pwsh -ArgumentList "cd 'C:\SSDLC\Nexus_Unzips'; npm start" -WindowStyle Hidden -PassThru
 
-          Write-Host 'Waiting for server to start...'
-          Start-Sleep -Seconds 20
-
-          # Verify server on localhost:3000
-          try {
-              $response = Invoke-WebRequest -Uri 'http://localhost:3000' -UseBasicParsing -TimeoutSec 10
-              if ($response.StatusCode -eq 200) {
-                  Write-Host 'Juice Shop is UP and running on http://localhost:3000'
-              } else {
-                  Write-Host "Server returned unexpected status code $($response.StatusCode)"
+          Write-Host 'Waiting for server to be ready on port 3000...'
+          $timeout = 60
+          $elapsed = 0
+          while ($true) {
+              try {
+                  $resp = Invoke-WebRequest -Uri 'http://localhost:3000' -UseBasicParsing -TimeoutSec 5
+                  if ($resp.StatusCode -eq 200) {
+                      Write-Host '✅ Juice Shop is UP and running on http://localhost:3000'
+                      break
+                  }
+              } catch { }
+              Start-Sleep -Seconds 2
+              $elapsed += 2
+              if ($elapsed -ge $timeout) {
+                  Write-Host '❌ Juice Shop server did not start within 60 seconds!'
                   exit 1
               }
-          } catch {
-              Write-Host 'Juice Shop server did not start properly!'
-              exit 1
           }
