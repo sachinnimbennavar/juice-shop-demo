@@ -1,4 +1,4 @@
-name: Open OWASP ZAP GUI
+name: Open OWASP ZAP via Desktop Shortcut
 
 on:
   workflow_dispatch:
@@ -8,9 +8,9 @@ jobs:
     runs-on: self-hosted
 
     steps:
-      - name: Launch OWASP ZAP GUI
+      - name: Launch OWASP ZAP via Desktop Shortcut
         shell: cmd
         run: |
-          echo Launching OWASP ZAP GUI...
-          start "" "C:\Program Files\ZAP\Zed Attack Proxy\ZAP.exe"
-          echo ✅ ZAP GUI should now be open.
+          echo Launching OWASP ZAP using desktop shortcut...
+          start "" "C:\Users\Public\Desktop\ZAP 2.16.1.lnk"
+          echo ✅ ZAP should now be open.
