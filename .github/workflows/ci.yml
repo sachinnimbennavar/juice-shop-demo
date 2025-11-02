@@ -6,113 +6,38 @@ on:
 jobs:
   zap-scan:
     runs-on: self-hosted
-    timeout-minutes: 120
-
-    env:
-      ZAP_HOST: "http://localhost:8082"
-      TARGET_URL: "http://localhost:3000"
-      CONTEXT_NAME: "juiceshop"
-      REPORT_FILE: "zap-report.html"
-      # If you protect ZAP with an API key, set it in repository secrets and uncomment below:
-      # ZAP_APIKEY: ${{ secrets.ZAP_APIKEY }}
 
     steps:
+      # 1️⃣ Launch OWASP ZAP GUI from Desktop Shortcut
       - name: Launch OWASP ZAP via Desktop Shortcut
         shell: powershell
         run: |
           $zapProcess = Get-Process -Name "ZAP" -ErrorAction SilentlyContinue
           if (-not $zapProcess) {
-              Write-Host "ZAP is not running. Launching OWASP ZAP..."
+              Write-Host "ZAP is not running. Launching via desktop shortcut..."
               Start-Process "C:\Users\Public\Desktop\ZAP 2.16.1.lnk"
-              Write-Host "Waiting 2 minutes for ZAP to fully open..."
+              Write-Host "Waiting 2 minutes for ZAP to initialize..."
               Start-Sleep -Seconds 120
-              Write-Host "✅ ZAP GUI should now be fully open."
+              Write-Host "ZAP GUI should now be open on port 8082."
           } else {
               Write-Host "ZAP is already running. Skipping launch."
           }
 
-      - name: Create Context and Include Target in Context (scope)
+      # 2️⃣ Trigger Active Scan against Juice Shop
+      - name: Run ZAP Active Scan on Juice Shop
         shell: powershell
         run: |
-          $ZAP = $env:ZAP_HOST
-          $ctx = $env:CONTEXT_NAME
-          $target = $env:TARGET_URL
+          Write-Host "Starting ZAP active scan on http://localhost:3000..."
+          $zapPath = "C:\SSDLC\ZAP_2.16.1"
+          $target = "http://localhost:3000"
+          $reportPath = "C:\SSDLC\zap_juice_shop_report.html"
 
-          # 1) Create a new context (if exists, this returns an error but we ignore it)
-          try {
-            Invoke-RestMethod -Uri "$ZAP/JSON/context/action/newContext/?contextName=$ctx" -Method Get -ErrorAction Stop
-            Write-Host "Created context: $ctx"
-          } catch {
-            Write-Host "Context $ctx may already exist or creation returned non-fatal error: $($_.Exception.Message)"
-          }
-
-          # 2) Include the target host (regex) in the context to restrict scans to this host
-          # We use a regex that matches the whole host: ^http://localhost:3000.*
-          $regex = [System.Uri]::EscapeDataString("^$($target).*")
-          try {
-            Invoke-RestMethod -Uri "$ZAP/JSON/context/action/includeInContext/?contextName=$ctx&regex=$regex" -Method Get -ErrorAction Stop
-            Write-Host "Included $target in context $ctx (regex: ^$target.* )"
-          } catch {
-            Write-Host "IncludeInContext returned non-fatal error: $($_.Exception.Message)"
-          }
-
-      - name: Quick Spider/Crawl (discover site structure)
-        shell: powershell
-        run: |
-          $ZAP = $env:ZAP_HOST
-          $target = $env:TARGET_URL
-
-          Write-Host "Starting Spider on $target..."
-          $spiderResp = Invoke-RestMethod -Uri "$ZAP/JSON/spider/action/scan/?url=$target&maxChildren=0&recurse=true" -Method Get
-          $spiderId = $spiderResp.scan
-          Write-Host "Spider scan id: $spiderId"
-
-          # Poll spider status
-          do {
-            Start-Sleep -Seconds 5
-            $status = Invoke-RestMethod -Uri "$ZAP/JSON/spider/view/status/?scanId=$spiderId" -Method Get
-            $progress = $status.status
-            Write-Host "Spider progress: $progress %"
-          } while ([int]$progress -lt 100)
-          Write-Host "✅ Spider finished."
-
-      - name: Start Active Scan (only in-context / in-scope)
-        shell: powershell
-        run: |
-          $ZAP = $env:ZAP_HOST
-          $target = $env:TARGET_URL
-          $ctx = $env:CONTEXT_NAME
-
-          # Ensure scan runs only against in-scope URLs by using inScopeOnly=true
-          Write-Host "Starting Active Scan on $target (inScopeOnly=true)..."
-          $ascanResp = Invoke-RestMethod -Uri "$ZAP/JSON/ascan/action/scan/?url=$target&recurse=true&inScopeOnly=true" -Method Get
-          $scanId = $ascanResp.scan
-          Write-Host "Active scan id: $scanId"
-
-          # Poll active scan progress
-          do {
-            Start-Sleep -Seconds 10
-            $status = Invoke-RestMethod -Uri "$ZAP/JSON/ascan/view/status/?scanId=$scanId" -Method Get
-            $progress = $status.status
-            Write-Host "Active scan progress: $progress %"
-          } while ([int]$progress -lt 100)
-          Write-Host "✅ Active scan completed."
-
-      - name: Download ZAP HTML Report
-        shell: powershell
-        run: |
-          $ZAP = $env:ZAP_HOST
-          $report = $env:REPORT_FILE
-
-          Write-Host "Fetching HTML report..."
-          Invoke-RestMethod -Uri "$ZAP/OTHER/core/other/htmlreport/" -Method Get -OutFile $report
-          Write-Host "Saved HTML report to $report"
-          Write-Host "Report size:"
-          Get-Item $report | Select-Object Name,Length
-
-      - name: Upload Report as Workflow Artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: zap-report
-          path: zap-report.html
+          & "$zapPath\zap-cli.exe" --zap-url http://127.0.0.1 --port 8082 status --timeout 300
+          & "$zapPath\zap-cli.exe" session new
+          & "$zapPath\zap-cli.exe" open-url $target
+          & "$zapPath\zap-cli.exe" spider $target
+          Write-Host "Crawling complete. Starting active scan..."
+          & "$zapPath\zap-cli.exe" active-scan $target
+          Write-Host "Scan complete. Generating HTML report..."
+          & "$zapPath\zap-cli.exe" report -o $reportPath -f html
+          Write-Host "Scan completed. Report saved at $reportPath."
