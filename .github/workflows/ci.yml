@@ -1,13 +1,3 @@
-name: Test OWASP ZAP Scan
-
-on:
-  workflow_dispatch:
-
-jobs:
-  zap-scan:
-    runs-on: self-hosted
-
-    steps:
       - name: Run OWASP ZAP Scan
         shell: cmd
         run: |
@@ -16,18 +6,10 @@ jobs:
           rem Ensure the report folder exists
           if not exist "C:\SSDLC\ZapScan_Reports" mkdir C:\SSDLC\ZapScan_Reports
 
-          rem Run quick scan using installed ZAP.exe
-          "C:\Program Files\ZAP\Zed Attack Proxy\ZAP.exe" -cmd -quickurl http://localhost:3000 -quickout C:\SSDLC\ZapScan_Reports\zap_report.html
+          rem Change directory to ZAP installation folder
+          cd /d "C:\Program Files\ZAP\Zed Attack Proxy"
 
-          rem If the above fails (GUI launched instead of CLI), try zap.bat fallback
-          if %ERRORLEVEL% neq 0 (
-            echo CLI run failed — attempting zap.bat fallback...
-            if exist "C:\Program Files\ZAP\Zed Attack Proxy\zap.bat" (
-              "C:\Program Files\ZAP\Zed Attack Proxy\zap.bat" -cmd -quickurl http://localhost:3000 -quickout C:\SSDLC\ZapScan_Reports\zap_report.html
-            ) else (
-              echo zap.bat not found in installation folder. Please check the installation.
-              exit /b 1
-            )
-          )
+          rem Run quick scan using zap.bat
+          zap.bat -cmd -quickurl http://localhost:3000 -quickout C:\SSDLC\ZapScan_Reports\zap_report.html
 
-          echo ✅ OWASP ZAP scan step finished. Check C:\SSDLC\ZapScan_Reports\zap_report.html
+          echo ✅ OWASP ZAP scan completed. Report saved at C:\SSDLC\ZapScan_Reports\zap_report.html
