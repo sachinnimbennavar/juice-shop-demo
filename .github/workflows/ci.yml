@@ -16,37 +16,23 @@ jobs:
           if (-not $zapProcess) {
               Write-Host "ZAP is not running. Launching OWASP ZAP..."
               Start-Process "C:\Users\Public\Desktop\ZAP 2.16.1.lnk"
-              Write-Host "Waiting 2 minutes for ZAP to fully open..."
-              Start-Sleep -Seconds 120
+              Write-Host "Waiting 1 minute for ZAP to fully open..."
+              Start-Sleep -Seconds 60
               Write-Host "✅ ZAP GUI should now be fully open."
           } else {
               Write-Host "ZAP is already running. Skipping launch."
           }
 
-      # 2️⃣ Trigger quick scan via ZAP API and save HTML report
-      - name: Run Quick Scan and Download Report
+      # 2️⃣ Trigger active scan on Juice Shop (localhost:3000) via ZAP API
+      - name: Trigger ZAP Scan
         shell: powershell
         run: |
-          $ZAP_API = "http://localhost:8082"
-          $TARGET = "http://localhost:3000"
-          $REPORT_PATH = "C:\SSDLC\ZapScan_Reports\zap_report.html"
+          Write-Host "Starting scan for http://localhost:3000..."
+          # Run ZAP in daemon mode for automation
+          $zapPath = "C:\Program Files\OWASP\ZAP\zap.bat"
+          Start-Process $zapPath -ArgumentList "-daemon" -NoNewWindow
+          Start-Sleep -Seconds 10  # wait a bit for ZAP daemon to start
 
-          # Ensure report folder exists
-          if (-not (Test-Path "C:\SSDLC\ZapScan_Reports")) { 
-              New-Item -ItemType Directory -Path "C:\SSDLC\ZapScan_Reports" 
-          }
-
-          # Start quick scan
-          Write-Host "Starting ZAP quick scan on $TARGET..."
-          Invoke-WebRequest "$ZAP_API/JSON/ascan/action/scan/?url=$TARGET" | Out-Null
-
-          # Wait until scan completes
-          Write-Host "Waiting for scan to complete..."
-          do {
-              Start-Sleep -Seconds 5
-              $status = (Invoke-WebRequest "$ZAP_API/JSON/ascan/view/status/").Content | ConvertFrom-Json
-          } while ([int]$status.status -lt 100)
-
-          Write-Host "Scan complete. Downloading HTML report..."
-          Invoke-WebRequest "$ZAP_API/OTHER/core/other/htmlreport/" -OutFile $REPORT_PATH
-          Write-Host "✅ Report saved to $REPORT_PATH"
+          # Use ZAP CLI to start the scan
+          zap-cli --zap-url http://localhost:8080 --start-scanner --target http://localhost:3000
+          Write-Host "✅ Scan started. You can monitor progress in ZAP GUI or generate report manually."
