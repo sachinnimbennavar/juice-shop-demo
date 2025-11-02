@@ -17,7 +17,7 @@ jobs:
               Write-Host "ZAP is not running. Launching OWASP ZAP..."
               Start-Process "C:\Users\Public\Desktop\ZAP 2.16.1.lnk"
               Write-Host "Waiting 1 minute for ZAP to fully open..."
-              Start-Sleep -Seconds 60
+              Start-Sleep -Seconds 120
               Write-Host "✅ ZAP GUI should now be fully open."
           } else {
               Write-Host "ZAP is already running. Skipping launch."
