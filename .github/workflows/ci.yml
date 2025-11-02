@@ -14,21 +14,21 @@ jobs:
         run: |
           echo Launching OWASP ZAP GUI...
           start "" "C:\Users\Public\Desktop\ZAP 2.16.1.lnk"
-          echo ✅ ZAP GUI launch initiated.
+          echo ✅ ZAP GUI should now be open.
 
-      # 2️⃣ Wait 2 minutes for ZAP to initialize
-      - name: Wait for 2 minutes
+      # 2️⃣ Wait 2 minutes for ZAP to fully start
+      - name: Wait for ZAP to initialize
         shell: cmd
         run: |
           echo Waiting 2 minutes for ZAP to initialize...
           timeout /t 120
           echo ✅ Wait complete.
 
-      # 3️⃣ Trigger quick scan and download report
+      # 3️⃣ Trigger quick scan via ZAP API and save HTML report
       - name: Run Quick Scan and Download Report
         shell: powershell
         run: |
-          $ZAP_API = "http://localhost:8082"
+          $ZAP_API = "http://localhost:8082"   # Replace with your ZAP API port if different
           $TARGET = "http://localhost:3000"
           $REPORT_PATH = "C:\SSDLC\ZapScan_Reports\zap_report.html"
 
@@ -39,7 +39,7 @@ jobs:
           Write-Host "Starting ZAP quick scan on $TARGET..."
           Invoke-WebRequest "$ZAP_API/JSON/ascan/action/scan/?url=$TARGET" | Out-Null
 
-          # Wait until scan completes
+          # Wait until scan completes (simple polling)
           Write-Host "Waiting for scan to complete..."
           do {
               Start-Sleep -Seconds 5
