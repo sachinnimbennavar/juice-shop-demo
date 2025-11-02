@@ -23,11 +23,29 @@ jobs:
               Write-Host "ZAP is already running. Skipping launch."
           }
 
-      # 2️⃣ Trigger quick scan via ZAP API and save HTML report
-      - name: Run Quick Scan and Download Report
+      # 2️⃣ Wait until ZAP API responds
+      - name: Wait for ZAP API to be ready
         shell: powershell
         run: |
           $ZAP_API = "http://localhost:8082"   # Replace with your ZAP API port if different
+          Write-Host "Waiting for ZAP API to become available..."
+          do {
+              try {
+                  Invoke-WebRequest "$ZAP_API/JSON/core/view/version/" -UseBasicParsing -ErrorAction Stop | Out-Null
+                  $ready = $true
+              } catch {
+                  Write-Host "ZAP API not ready yet, waiting 5 seconds..."
+                  Start-Sleep -Seconds 5
+                  $ready = $false
+              }
+          } while (-not $ready)
+          Write-Host "✅ ZAP API is ready!"
+
+      # 3️⃣ Trigger quick scan via ZAP API and save HTML report
+      - name: Run Quick Scan and Download Report
+        shell: powershell
+        run: |
+          $ZAP_API = "http://localhost:8082"
           $TARGET = "http://localhost:3000"
           $REPORT_PATH = "C:\SSDLC\ZapScan_Reports\zap_report.html"
 
