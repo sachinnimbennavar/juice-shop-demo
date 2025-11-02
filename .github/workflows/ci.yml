@@ -8,7 +8,7 @@ jobs:
     runs-on: self-hosted
 
     steps:
-      # 1️⃣ Launch OWASP ZAP GUI from Desktop Shortcut if not already running
+      # 1️⃣ Launch OWASP ZAP GUI via desktop shortcut
       - name: Launch OWASP ZAP via Desktop Shortcut
         shell: powershell
         run: |
@@ -23,13 +23,14 @@ jobs:
               Write-Host "ZAP is already running. Skipping launch."
           }
 
-      # 2️⃣ Run OWASP ZAP headless active scan using zap.bat from 64-bit install location
+      # 2️⃣ Run headless scan on Juice Shop using Start-Process for zap.bat
       - name: Run OWASP ZAP Headless Active Scan
         shell: powershell
         run: |
-          $targetUrl = 'http://localhost:3000'
-          $reportFile = 'C:\SSDLC\zap_juice_shop_report.html'
-          # Properly quote the path with spaces in PowerShell
+          $zapBatPath = "C:\Program Files\OWASP\Zed Attack Proxy\zap.bat"
+          $targetUrl = "http://localhost:3000"
+          $reportFile = "C:\SSDLC\zap_juice_shop_report.html"
+
           Write-Host "Starting ZAP headless active scan on $targetUrl..."
-          & '"C:\Program Files\OWASP\Zed Attack Proxy\zap.bat"' -cmd -quickurl $targetUrl -quickprogress -report $reportFile
+          Start-Process -FilePath $zapBatPath -ArgumentList "-cmd","-quickurl",$targetUrl,"-quickprogress","-report",$reportFile -Wait
           Write-Host "Active scan completed. Report generated at $reportFile."
