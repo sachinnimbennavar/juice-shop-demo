@@ -8,16 +8,26 @@ jobs:
     runs-on: self-hosted
 
     steps:
-      - name: Start Juice Shop and Wait for Port 3000
+      - name: Start Juice Shop from Unzipped Artifact and Wait for Port 3000
         shell: powershell
         run: |
+          # Go to the folder with unzipped Juice Shop
           Set-Location 'C:\SSDLC\Nexus_Unzips'
 
-          # Start server in background
-          Write-Host "Starting Juice Shop server..."
-          $proc = Start-Process pwsh -ArgumentList "cd 'C:\SSDLC\Nexus_Unzips'; npm start" -WindowStyle Hidden -PassThru
+          # Kill any existing process on port 3000
+          $connection = Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue
+          if ($connection) {
+              $pid = $connection.OwningProcess
+              Write-Host "Port 3000 in use by PID $pid — killing it..."
+              Stop-Process -Id $pid -Force
+          }
 
-          # Wait for port 3000 to be ready
+          # Start Juice Shop server in the current PowerShell (foreground)
+          Write-Host "Starting Juice Shop server..."
+          Start-Job { npm start } | Out-Null
+
+          # Wait until port 3000 is listening
+          Write-Host "Waiting for Juice Shop server to start on port 3000..."
           $timeout = 60
           $elapsed = 0
           while ($true) {
