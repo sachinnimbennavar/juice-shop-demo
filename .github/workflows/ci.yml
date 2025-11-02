@@ -1,47 +1,21 @@
-name: Start Juice Shop Server
+name: Test OWASP ZAP Scan
 
 on:
   workflow_dispatch:
 
 jobs:
-  start-server:
+  zap-scan:
     runs-on: self-hosted
 
     steps:
-      - name: Start Juice Shop from Unzipped Artifact and Wait for Port 3000
-        shell: powershell
+      - name: Run OWASP ZAP Scan
+        shell: cmd
         run: |
-          # Go to the folder with unzipped Juice Shop
-          Set-Location 'C:\SSDLC\Nexus_Unzips'
-
-          # Kill any existing process on port 3000
-          $connection = Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue
-          if ($connection) {
-              $pid = $connection.OwningProcess
-              Write-Host "Port 3000 in use by PID $pid - killing it..."
-              Stop-Process -Id $pid -Force
-          }
-
-          # Start Juice Shop server in background
-          Write-Host "Starting Juice Shop server..."
-          Start-Job { npm start } | Out-Null
-
-          # Wait until port 3000 is listening
-          Write-Host "Waiting for Juice Shop server to start on port 3000..."
-          $timeout = 300  # 5 minutes
-          $elapsed = 0
-          while ($true) {
-              try {
-                  $resp = Invoke-WebRequest -Uri 'http://localhost:3000' -UseBasicParsing -TimeoutSec 5
-                  if ($resp.StatusCode -eq 200) {
-                      Write-Host "Juice Shop server started successfully on port 3000!"
-                      break
-                  }
-              } catch { }
-              Start-Sleep -Seconds 5
-              $elapsed += 5
-              if ($elapsed -ge $timeout) {
-                  Write-Host "Juice Shop server did not start within 5 minutes!"
-                  exit 1
-              }
-          }
+          echo Running OWASP ZAP Scan...
+          
+          if not exist "C:\SSDLC\ZapScan_Reports" mkdir C:\SSDLC\ZapScan_Reports
+          
+          rem Run a quick scan against Juice Shop and save the report
+          "C:\SSDLC\ZAP_2_16_1_windows.exe" -cmd -quickurl http://localhost:3000 -quickout C:\SSDLC\ZapScan_Reports\zap_report.html
+          
+          echo ✅ OWASP ZAP scan completed. Report saved at C:\SSDLC\ZapScan_Reports\zap_report.html
