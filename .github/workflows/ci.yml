@@ -18,11 +18,11 @@ jobs:
           $connection = Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue
           if ($connection) {
               $pid = $connection.OwningProcess
-              Write-Host "Port 3000 in use by PID $pid — killing it..."
+              Write-Host "Port 3000 in use by PID $pid - killing it..."
               Stop-Process -Id $pid -Force
           }
 
-          # Start Juice Shop server in the current PowerShell (foreground)
+          # Start Juice Shop server in background
           Write-Host "Starting Juice Shop server..."
           Start-Job { npm start } | Out-Null
 
@@ -34,14 +34,14 @@ jobs:
               try {
                   $resp = Invoke-WebRequest -Uri 'http://localhost:3000' -UseBasicParsing -TimeoutSec 5
                   if ($resp.StatusCode -eq 200) {
-                      Write-Host "✅ Juice Shop server started successfully on port 3000!"
+                      Write-Host "Juice Shop server started successfully on port 3000!"
                       break
                   }
               } catch { }
               Start-Sleep -Seconds 2
               $elapsed += 2
               if ($elapsed -ge $timeout) {
-                  Write-Host "❌ Juice Shop server did not start within 60 seconds!"
+                  Write-Host "Juice Shop server did not start within 60 seconds!"
                   exit 1
               }
           }
