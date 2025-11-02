@@ -16,23 +16,13 @@ jobs:
           start "" "C:\Users\Public\Desktop\ZAP 2.16.1.lnk"
           echo ✅ ZAP GUI launch initiated.
 
-      # 2️⃣ Wait until ZAP API responds
-      - name: Wait for ZAP to be ready
-        shell: powershell
+      # 2️⃣ Wait 2 minutes for ZAP to initialize
+      - name: Wait for 2 minutes
+        shell: cmd
         run: |
-          $ZAP_API = "http://localhost:8082"  # Replace with your ZAP API port if different
-          Write-Host "Waiting for ZAP API to become available..."
-          do {
-              try {
-                  Invoke-WebRequest "$ZAP_API/JSON/core/view/version/" -UseBasicParsing -ErrorAction Stop | Out-Null
-                  $ready = $true
-              } catch {
-                  Write-Host "ZAP not ready yet, waiting 5 seconds..."
-                  Start-Sleep -Seconds 5
-                  $ready = $false
-              }
-          } while (-not $ready)
-          Write-Host "✅ ZAP is up and ready."
+          echo Waiting 2 minutes for ZAP to initialize...
+          timeout /t 120
+          echo ✅ Wait complete.
 
       # 3️⃣ Trigger quick scan and download report
       - name: Run Quick Scan and Download Report
