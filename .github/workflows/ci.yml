@@ -8,7 +8,7 @@ jobs:
     runs-on: self-hosted
 
     steps:
-      # 1️⃣ Launch ZAP GUI via desktop shortcut only if not already running
+      # 1️⃣ Launch ZAP GUI via desktop shortcut if not already running
       - name: Launch OWASP ZAP via Desktop Shortcut
         shell: powershell
         run: |
@@ -23,10 +23,30 @@ jobs:
               Write-Host "ZAP is already running. Skipping launch."
           }
 
-      # 2️⃣ Instruction to manually scan Juice Shop
-      - name: Scan Juice Shop in ZAP GUI
+      # 2️⃣ Run scan on Juice Shop and generate report
+      - name: Scan Juice Shop and Generate Report
         shell: powershell
         run: |
-          Write-Host "⚠️ Juice Shop is already running at http://localhost:3000"
-          Write-Host "⚠️ Please switch to ZAP GUI and start an active scan manually."
-          Write-Host "Once scanning is complete, generate the report manually (Report -> Generate HTML Report)."
+          $zapApiUrl = "http://localhost:8082"  # ZAP local API
+          $targetUrl = "http://localhost:3000"
+          $reportPath = "C:\actions-runner\_work\zap-report.html"
+
+          Write-Host "Starting active scan on $targetUrl..."
+          
+          # Start active scan
+          $scanResponse = Invoke-RestMethod -Uri "$zapApiUrl/JSON/ascan/action/scan/?url=$targetUrl" -Method GET
+          $scanId = $scanResponse.scan
+          Write-Host "Scan ID: $scanId"
+
+          # Poll scan status until complete
+          do {
+              Start-Sleep -Seconds 10
+              $status = Invoke-RestMethod -Uri "$zapApiUrl/JSON/ascan/view/status/?scanId=$scanId" -Method GET
+              Write-Host "Scan progress: $($status.status)%"
+          } while ($status.status -ne "100")
+
+          Write-Host "Scan completed. Generating HTML report..."
+          
+          # Generate HTML report
+          Invoke-RestMethod -Uri "$zapApiUrl/OTHER/core/other/htmlreport/" -Method GET -OutFile $reportPath
+          Write-Host "✅ Report saved at $reportPath"
