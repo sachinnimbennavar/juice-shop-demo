@@ -1,4 +1,4 @@
-name: Juice Shop CI/CD (Install Once + Deploy + Run)
+name: Juice Shop CI/CD (7-Zip Compression + Nexus Upload)
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ jobs:
     timeout-minutes: 180
 
     steps:
-      # 1️⃣ Checkout repo
+      # 1️⃣ Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -19,7 +19,7 @@ jobs:
         run: |
           setx NODE_OPTIONS "--max_old_space_size=4096"
 
-      # 3️⃣ Install all dependencies once (backend + frontend)
+      # 3️⃣ Install dependencies (Backend + Frontend)
       - name: Install dependencies (Backend + Frontend)
         shell: cmd
         run: |
@@ -36,50 +36,67 @@ jobs:
             call npm install
             cd ..
           )
+          echo ✅ Dependencies ready.
 
-      # 4️⃣ Prepare deployment artifact (include installed dependencies)
-      - name: Prepare Deployment Artifact
+      # 4️⃣ Compress build output using 7-Zip
+      - name: Compress build output (7-Zip)
         shell: cmd
-        env:
-          ARTIFACT_DIR: C:\SSDLC\Artifact
         run: |
-          echo Preparing artifact...
-          if exist "%ARTIFACT_DIR%" rmdir /s /q "%ARTIFACT_DIR%"
-          mkdir "%ARTIFACT_DIR%"
-          powershell Compress-Archive -Path * -DestinationPath "%ARTIFACT_DIR%\juice-shop.zip" -Force
-          echo Artifact prepared at %ARTIFACT_DIR%\juice-shop.zip
+          echo Checking for 7-Zip installation...
+          if not exist "C:\Program Files\7-Zip\7z.exe" (
+            echo ❌ 7-Zip not found! Please install it before running.
+            exit /b 1
+          )
+          echo Compressing build output using 7-Zip...
+          if exist juice-shop.7z del /f /q juice-shop.7z
+          "C:\Program Files\7-Zip\7z.exe" a juice-shop.7z * -mx9
+          for %%I in (juice-shop.7z) do set SIZE_MB=%%~zI
+          set /a SIZE_MB=%SIZE_MB%/1048576
+          echo 📦 Compressed file size: %SIZE_MB% MB
+          echo ✅ Compression complete.
 
       # 5️⃣ Upload artifact to Nexus
-      - name: Upload Artifact to Nexus
+      - name: Upload artifact to Nexus
         shell: cmd
         env:
           NEXUS_URL: ${{ secrets.NEXUS_URL }}
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
-          echo Uploading artifact to Nexus...
-          curl -u %NEXUS_USERNAME%:%NEXUS_PASSWORD% --upload-file C:\SSDLC\Artifact\juice-shop.zip %NEXUS_URL%/repository/juice-shop/juice-shop.zip
+          echo Uploading 7z artifact to Nexus...
+          curl -u %NEXUS_USERNAME%:%NEXUS_PASSWORD% --upload-file juice-shop.7z %NEXUS_URL%/repository/juice-shop/juice-shop.7z
+          if %ERRORLEVEL% neq 0 (
+            echo ❌ Upload failed!
+            exit /b 1
+          )
+          echo ✅ Upload completed successfully.
 
-      # 6️⃣ Download and unzip artifact
-      - name: Download & Unzip from Nexus
+      # 6️⃣ Download and extract artifact from Nexus
+      - name: Download & Extract Artifact
         shell: cmd
         env:
           NEXUS_URL: ${{ secrets.NEXUS_URL }}
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
-          echo Cleaning and downloading artifact...
+          echo Cleaning old unzips...
           if exist C:\SSDLC\Nexus_Unzips rmdir /s /q C:\SSDLC\Nexus_Unzips
           mkdir C:\SSDLC\Nexus_Unzips
-          curl -u %NEXUS_USERNAME%:%NEXUS_PASSWORD% -o C:\SSDLC\Nexus_Unzips\juice-shop.zip %NEXUS_URL%/repository/juice-shop/juice-shop.zip
-          powershell Expand-Archive -Path C:\SSDLC\Nexus_Unzips\juice-shop.zip -DestinationPath C:\SSDLC\Nexus_Unzips -Force
-          echo Unzip completed.
+          echo Downloading artifact from Nexus...
+          curl -u %NEXUS_USERNAME%:%NEXUS_PASSWORD% -o C:\SSDLC\Nexus_Unzips\juice-shop.7z %NEXUS_URL%/repository/juice-shop/juice-shop.7z
+          if %ERRORLEVEL% neq 0 (
+            echo ❌ Download failed!
+            exit /b 1
+          )
+          echo Extracting using 7-Zip...
+          "C:\Program Files\7-Zip\7z.exe" x C:\SSDLC\Nexus_Unzips\juice-shop.7z -oC:\SSDLC\Nexus_Unzips -y
+          echo ✅ Extraction complete.
 
-      # 7️⃣ Start the app to confirm it runs on localhost:3000
-      - name: Run Juice Shop
+      # 7️⃣ Start Juice Shop
+      - name: Start Juice Shop
         shell: cmd
         run: |
           cd C:\SSDLC\Nexus_Unzips
           echo Starting Juice Shop...
           start /b cmd /c "npm start"
-          echo Juice Shop started. Check http://localhost:3000
+          echo ✅ Juice Shop started. Check http://localhost:3000
