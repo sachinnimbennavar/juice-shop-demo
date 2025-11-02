@@ -1,15 +1,12 @@
-      - name: Run OWASP ZAP Scan
-        shell: cmd
+name: Workflow Name
+
+on:
+  workflow_dispatch:  # or push, pull_request, etc.
+
+jobs:
+  job_name:
+    runs-on: self-hosted
+    steps:
+      - name: Step Name
         run: |
-          echo Running OWASP ZAP Scan...
-
-          rem Ensure the report folder exists
-          if not exist "C:\SSDLC\ZapScan_Reports" mkdir C:\SSDLC\ZapScan_Reports
-
-          rem Change directory to ZAP installation folder
-          cd /d "C:\Program Files\ZAP\Zed Attack Proxy"
-
-          rem Run quick scan using zap.bat
-          zap.bat -cmd -quickurl http://localhost:3000 -quickout C:\SSDLC\ZapScan_Reports\zap_report.html
-
-          echo ✅ OWASP ZAP scan completed. Report saved at C:\SSDLC\ZapScan_Reports\zap_report.html
+          commands...
