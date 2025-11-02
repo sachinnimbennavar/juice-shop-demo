@@ -1,131 +1,45 @@
-name: Juice Shop CI/CD (Smart Frontend Change Detection)
+name: Start Node.js Server & Verify Port
 
 on:
   workflow_dispatch:
 
 jobs:
-  build-upload-deploy:
+  start-server:
     runs-on: self-hosted
-    timeout-minutes: 180
+    timeout-minutes: 30
 
     steps:
-      # 1️⃣ Checkout repository
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 2   # needed for git diff
-
-      # 2️⃣ Detect frontend changes
-      - name: Check for frontend changes
-        id: changes
-        shell: cmd
+      - name: Start Juice Shop Server
+        shell: powershell
         run: |
-          echo Checking for changes in frontend...
-          git fetch origin
-          git diff --quiet HEAD^ HEAD -- frontend
-          if %ERRORLEVEL%==0 (
-            echo ::set-output name=frontend_changed::false
-            echo ✅ No frontend changes detected.
-          ) else (
-            echo ::set-output name=frontend_changed::true
-            echo ⚡ Frontend changes detected!
-          )
+          Write-Host "🟢 Starting Juice Shop server..."
+          Set-Location "C:\SSDLC\Nexus_Unzips"
 
-      # 3️⃣ Set Node memory (4GB)
-      - name: Set Node memory
-        shell: cmd
-        run: |
-          setx NODE_OPTIONS "--max_old_space_size=4096"
+          # Kill any existing process on port 3000
+          $connection = Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue
+          if ($connection) {
+            $pid = $connection.OwningProcess
+            Write-Host "⚠️ Port 3000 in use by PID $pid — killing it..."
+            Stop-Process -Id $pid -Force
+          }
 
-      # 4️⃣ Install dependencies (Backend + Frontend) — only if frontend changed
-      - name: Install dependencies (Backend + Frontend)
-        if: steps.changes.outputs.frontend_changed == 'true'
-        shell: cmd
-        run: |
-          echo Installing dependencies...
-          if exist node_modules (
-            echo node_modules already exists, skipping install.
-          ) else (
-            call npm install
-          )
-          if exist frontend\node_modules (
-            echo frontend/node_modules already exists, skipping install.
-          ) else (
-            cd frontend
-            call npm install
-            cd ..
-          )
-          echo ✅ Dependencies ready.
-      - name: Skip dependency installation
-        if: steps.changes.outputs.frontend_changed == 'false'
-        shell: cmd
-        run: echo ⏭️ Skipping npm install — no frontend changes.
+          # Start the server in background
+          Write-Host "🚀 Launching npm start in background..."
+          Start-Process powershell -ArgumentList "cd C:\SSDLC\Nexus_Unzips; npm start" -WindowStyle Hidden
+          
+          Write-Host "⏳ Waiting for server to start..."
+          Start-Sleep -Seconds 20
 
-      # 5️⃣ Compress build output (7-Zip) — only if frontend changed
-      - name: Compress build output (7-Zip)
-        if: steps.changes.outputs.frontend_changed == 'true'
-        shell: cmd
-        run: |
-          echo Checking for 7-Zip installation...
-          if not exist "C:\Program Files\7-Zip\7z.exe" (
-            echo ❌ 7-Zip not found! Please install it before running.
-            exit /b 1
-          )
-          echo Compressing build output using 7-Zip...
-          if exist juice-shop.7z del /f /q juice-shop.7z
-          "C:\Program Files\7-Zip\7z.exe" a juice-shop.7z * -mx9
-          for %%I in (juice-shop.7z) do set SIZE_MB=%%~zI
-          set /a SIZE_MB=%SIZE_MB%/1048576
-          echo 📦 Compressed file size: %SIZE_MB% MB
-          echo ✅ Compression complete.
-      - name: Skip compression
-        if: steps.changes.outputs.frontend_changed == 'false'
-        shell: cmd
-        run: echo ⏭️ Skipping compression — no frontend changes.
-
-      # 6️⃣ Upload artifact to Nexus
-      - name: Upload artifact to Nexus
-        if: steps.changes.outputs.frontend_changed == 'true'
-        shell: cmd
-        env:
-          NEXUS_URL: ${{ secrets.NEXUS_URL }}
-          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
-          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
-        run: |
-          echo Uploading 7z artifact to Nexus...
-          curl -u %NEXUS_USERNAME%:%NEXUS_PASSWORD% --upload-file juice-shop.7z %NEXUS_URL%/repository/juice-shop/juice-shop.7z
-          if %ERRORLEVEL% neq 0 (
-            echo ❌ Upload failed!
-            exit /b 1
-          )
-          echo ✅ Upload completed successfully.
-      - name: Skip Nexus upload
-        if: steps.changes.outputs.frontend_changed == 'false'
-        shell: cmd
-        run: echo ⏭️ Skipping Nexus upload — no frontend changes.
-
-      # 7️⃣ Download & Extract Artifact — only if frontend changed
-      - name: Download & Extract Artifact
-        if: steps.changes.outputs.frontend_changed == 'true'
-        shell: cmd
-        env:
-          NEXUS_URL: ${{ secrets.NEXUS_URL }}
-          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
-          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
-        run: |
-          echo Cleaning old unzips...
-          if exist C:\SSDLC\Nexus_Unzips rmdir /s /q C:\SSDLC\Nexus_Unzips
-          mkdir C:\SSDLC\Nexus_Unzips
-          echo Downloading artifact from Nexus...
-          curl -u %NEXUS_USERNAME%:%NEXUS_PASSWORD% -o C:\SSDLC\Nexus_Unzips\juice-shop.7z %NEXUS_URL%/repository/juice-shop/juice-shop.7z
-          if %ERRORLEVEL% neq 0 (
-            echo ❌ Download failed!
-            exit /b 1
-          )
-          echo Extracting using 7-Zip...
-          "C:\Program Files\7-Zip\7z.exe" x C:\SSDLC\Nexus_Unzips\juice-shop.7z -oC:\SSDLC\Nexus_Unzips -y
-          echo ✅ Extraction complete.
-      - name: Skip download/extract
-        if: steps.changes.outputs.frontend_changed == 'false'
-        shell: cmd
-        run: echo ⏭️ Skipping download/extract — no frontend changes.
+          # Verify server on localhost:3000
+          try {
+            $response = Invoke-WebRequest -Uri "http://localhost:3000" -UseBasicParsing -TimeoutSec 10
+            if ($response.StatusCode -eq 200) {
+              Write-Host "✅ Juice Shop is UP and running on http://localhost:3000"
+            } else {
+              Write-Host "❌ Server returned unexpected status code $($response.StatusCode)"
+              exit 1
+            }
+          } catch {
+            Write-Host "❌ Juice Shop server did not start properly!"
+            exit 1
+          }
