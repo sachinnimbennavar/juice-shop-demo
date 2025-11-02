@@ -1,4 +1,4 @@
-name: Juice Shop CI/CD (7-Zip Compression + Nexus Upload)
+name: Juice Shop CI/CD (Smart Frontend Change Detection)
 
 on:
   workflow_dispatch:
@@ -12,15 +12,34 @@ jobs:
       # 1️⃣ Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 2   # needed for git diff
 
-      # 2️⃣ Set Node memory (4GB)
+      # 2️⃣ Detect frontend changes
+      - name: Check for frontend changes
+        id: changes
+        shell: cmd
+        run: |
+          echo Checking for changes in frontend...
+          git fetch origin
+          git diff --quiet HEAD^ HEAD -- frontend
+          if %ERRORLEVEL%==0 (
+            echo ::set-output name=frontend_changed::false
+            echo ✅ No frontend changes detected.
+          ) else (
+            echo ::set-output name=frontend_changed::true
+            echo ⚡ Frontend changes detected!
+          )
+
+      # 3️⃣ Set Node memory (4GB)
       - name: Set Node memory
         shell: cmd
         run: |
           setx NODE_OPTIONS "--max_old_space_size=4096"
 
-      # 3️⃣ Install dependencies (Backend + Frontend)
+      # 4️⃣ Install dependencies (Backend + Frontend) — only if frontend changed
       - name: Install dependencies (Backend + Frontend)
+        if: steps.changes.outputs.frontend_changed == 'true'
         shell: cmd
         run: |
           echo Installing dependencies...
@@ -37,9 +56,14 @@ jobs:
             cd ..
           )
           echo ✅ Dependencies ready.
+      - name: Skip dependency installation
+        if: steps.changes.outputs.frontend_changed == 'false'
+        shell: cmd
+        run: echo ⏭️ Skipping npm install — no frontend changes.
 
-      # 4️⃣ Compress build output using 7-Zip
+      # 5️⃣ Compress build output (7-Zip) — only if frontend changed
       - name: Compress build output (7-Zip)
+        if: steps.changes.outputs.frontend_changed == 'true'
         shell: cmd
         run: |
           echo Checking for 7-Zip installation...
@@ -54,9 +78,14 @@ jobs:
           set /a SIZE_MB=%SIZE_MB%/1048576
           echo 📦 Compressed file size: %SIZE_MB% MB
           echo ✅ Compression complete.
+      - name: Skip compression
+        if: steps.changes.outputs.frontend_changed == 'false'
+        shell: cmd
+        run: echo ⏭️ Skipping compression — no frontend changes.
 
-      # 5️⃣ Upload artifact to Nexus
+      # 6️⃣ Upload artifact to Nexus
       - name: Upload artifact to Nexus
+        if: steps.changes.outputs.frontend_changed == 'true'
         shell: cmd
         env:
           NEXUS_URL: ${{ secrets.NEXUS_URL }}
@@ -70,9 +99,14 @@ jobs:
             exit /b 1
           )
           echo ✅ Upload completed successfully.
+      - name: Skip Nexus upload
+        if: steps.changes.outputs.frontend_changed == 'false'
+        shell: cmd
+        run: echo ⏭️ Skipping Nexus upload — no frontend changes.
 
-      # 6️⃣ Download and extract artifact from Nexus
+      # 7️⃣ Download & Extract Artifact — only if frontend changed
       - name: Download & Extract Artifact
+        if: steps.changes.outputs.frontend_changed == 'true'
         shell: cmd
         env:
           NEXUS_URL: ${{ secrets.NEXUS_URL }}
@@ -91,12 +125,7 @@ jobs:
           echo Extracting using 7-Zip...
           "C:\Program Files\7-Zip\7z.exe" x C:\SSDLC\Nexus_Unzips\juice-shop.7z -oC:\SSDLC\Nexus_Unzips -y
           echo ✅ Extraction complete.
-
-      # 7️⃣ Start Juice Shop
-      - name: Start Juice Shop
+      - name: Skip download/extract
+        if: steps.changes.outputs.frontend_changed == 'false'
         shell: cmd
-        run: |
-          cd C:\SSDLC\Nexus_Unzips
-          echo Starting Juice Shop...
-          start /b cmd /c "npm start"
-          echo ✅ Juice Shop started. Check http://localhost:3000
+        run: echo ⏭️ Skipping download/extract — no frontend changes.
