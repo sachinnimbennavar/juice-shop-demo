@@ -16,7 +16,7 @@ jobs:
           rem Ensure the report folder exists
           if not exist "C:\SSDLC\ZapScan_Reports" mkdir C:\SSDLC\ZapScan_Reports
           
-          rem Run a quick scan against Juice Shop and save the HTML report
-          "C:\SSDLC\ZAP_2_16_1_windows.exe" -cmd -quickurl http://localhost:3000 -quickout C:\SSDLC\ZapScan_Reports\zap_report.html
+          rem Run a quick scan using the installed ZAP app
+          "C:\SSDLC\ZAP_2_16_1\zap.bat" -cmd -quickurl http://localhost:3000 -quickout C:\SSDLC\ZapScan_Reports\zap_report.html
           
           echo ✅ OWASP ZAP scan completed. Report saved at C:\SSDLC\ZapScan_Reports\zap_report.html
