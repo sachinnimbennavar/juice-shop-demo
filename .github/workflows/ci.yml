@@ -10,36 +10,36 @@ jobs:
 
     steps:
       - name: Start Juice Shop Server
-        shell: powershell
+        shell: pwsh
         run: |
-          Write-Host "Starting Juice Shop server..."
-          Set-Location "C:\SSDLC\Nexus_Unzips"
+          Write-Host 'Starting Juice Shop server...'
+          Set-Location 'C:\SSDLC\Nexus_Unzips'
 
           # Kill any existing process on port 3000
           $connection = Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue
           if ($connection) {
               $pid = $connection.OwningProcess
-              Write-Host "Port 3000 in use by PID $pid — killing it..."
+              Write-Host "Port 3000 in use by PID $pid - killing it..."
               Stop-Process -Id $pid -Force
           }
 
           # Start the server in background
-          Write-Host "Launching npm start in background..."
-          Start-Process powershell -ArgumentList "cd C:\SSDLC\Nexus_Unzips; npm start" -WindowStyle Hidden
+          Write-Host 'Launching npm start in background...'
+          Start-Process pwsh -ArgumentList "cd 'C:\SSDLC\Nexus_Unzips'; npm start" -WindowStyle Hidden
 
-          Write-Host "Waiting for server to start..."
+          Write-Host 'Waiting for server to start...'
           Start-Sleep -Seconds 20
 
           # Verify server on localhost:3000
           try {
-              $response = Invoke-WebRequest -Uri "http://localhost:3000" -UseBasicParsing -TimeoutSec 10
+              $response = Invoke-WebRequest -Uri 'http://localhost:3000' -UseBasicParsing -TimeoutSec 10
               if ($response.StatusCode -eq 200) {
-                  Write-Host "Juice Shop is UP and running on http://localhost:3000"
+                  Write-Host 'Juice Shop is UP and running on http://localhost:3000'
               } else {
                   Write-Host "Server returned unexpected status code $($response.StatusCode)"
                   exit 1
               }
           } catch {
-              Write-Host "Juice Shop server did not start properly!"
+              Write-Host 'Juice Shop server did not start properly!'
               exit 1
           }
