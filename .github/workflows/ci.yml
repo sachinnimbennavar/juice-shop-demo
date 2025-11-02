@@ -1,36 +1,114 @@
-name: Open OWASP ZAP and Scan Juice Shop
+name: Juice Shop CI/CD (7-Zip Compression + Nexus Upload)
 
 on:
   workflow_dispatch:
 
 jobs:
-  zap-scan:
+  build-upload-deploy:
     runs-on: self-hosted
+    timeout-minutes: 180
 
     steps:
-      # 1️⃣ Launch OWASP ZAP GUI via desktop shortcut if not running
-      - name: Launch OWASP ZAP via Desktop Shortcut
-        shell: powershell
+      # 1️⃣ Checkout repository
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2️⃣ Set Node memory (4GB)
+      - name: Set Node memory
+        shell: cmd
         run: |
-          $zapProcess = Get-Process -Name "ZAP" -ErrorAction SilentlyContinue
-          if (-not $zapProcess) {
-              Write-Host "ZAP is not running. Launching via desktop shortcut..."
-              Start-Process "C:\Users\Public\Desktop\ZAP 2.16.1.lnk"
-              Write-Host "Waiting 2 minutes for ZAP to initialize..."
-              Start-Sleep -Seconds 120
-              Write-Host "ZAP GUI should now be open on port 8082."
-          } else {
-              Write-Host "ZAP is already running. Skipping launch."
+          setx NODE_OPTIONS "--max_old_space_size=4096"
+
+      # 3️⃣ Install dependencies (Backend + Frontend)
+      - name: Install dependencies (Backend + Frontend)
+        shell: cmd
+        run: |
+          echo Installing dependencies...
+          if exist node_modules (
+            echo node_modules already exists, skipping install.
+          ) else (
+            call npm install
+          )
+          if exist frontend\node_modules (
+            echo frontend/node_modules already exists, skipping install.
+          ) else (
+            cd frontend
+            call npm install
+            cd ..
+          )
+          echo ✅ Dependencies ready.
+
+      # 4️⃣ SonarQube code analysis
+      - name: SonarQube Scan
+        shell: powershell
+        env:
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          Write-Host "[INFO] Starting SonarQube Scan..."
+          $sonarScannerPath = "C:\sonar-scanner\bin\sonar-scanner.bat"
+          if (!(Test-Path $sonarScannerPath)) {
+              Write-Host "[ERROR] sonar-scanner not found at $sonarScannerPath"
+              exit 1
           }
+          & $sonarScannerPath `
+            -D"sonar.projectKey=JuiceShop" `
+            -D"sonar.projectName=JuiceShop" `
+            -D"sonar.sources=." `
+            -D"sonar.host.url=$env:SONAR_HOST_URL" `
+            -D"sonar.login=$env:SONAR_TOKEN"
+          Write-Host "✅ SonarQube scan completed successfully."
 
-      # 2️⃣ Run headless active scan using ZAP.exe
-      - name: Run OWASP ZAP Headless Scan
-        shell: powershell
+      # 5️⃣ Compress build output using 7-Zip
+      - name: Compress build output (7-Zip)
+        shell: cmd
         run: |
-          $zapExePath = "C:\Program Files\ZAP\Zed Attack Proxy\ZAP.exe"
-          $targetUrl = "http://localhost:3000"
-          $reportFile = "C:\SSDLC\zap_juice_shop_report.html"
+          echo Checking for 7-Zip installation...
+          if not exist "C:\Program Files\7-Zip\7z.exe" (
+            echo ❌ 7-Zip not found! Please install it before running.
+            exit /b 1
+          )
+          echo Compressing build output using 7-Zip...
+          if exist juice-shop.7z del /f /q juice-shop.7z
+          "C:\Program Files\7-Zip\7z.exe" a juice-shop.7z * -mx9
+          for %%I in (juice-shop.7z) do set SIZE_MB=%%~zI
+          set /a SIZE_MB=%SIZE_MB%/1048576
+          echo 📦 Compressed file size: %SIZE_MB% MB
+          echo ✅ Compression complete.
 
-          Write-Host "Starting OWASP ZAP headless active scan on $targetUrl..."
-          & $zapExePath -cmd -quickurl $targetUrl -quickprogress -report $reportFile
-          Write-Host "Active scan completed. Report generated at $reportFile."
+      # 6️⃣ Upload artifact to Nexus
+      - name: Upload artifact to Nexus
+        shell: cmd
+        env:
+          NEXUS_URL: ${{ secrets.NEXUS_URL }}
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+        run: |
+          echo Uploading 7z artifact to Nexus...
+          curl -u %NEXUS_USERNAME%:%NEXUS_PASSWORD% --upload-file juice-shop.7z %NEXUS_URL%/repository/juice-shop/juice-shop.7z
+          if %ERRORLEVEL% neq 0 (
+            echo ❌ Upload failed!
+            exit /b 1
+          )
+          echo ✅ Upload completed successfully.
+
+      # 7️⃣ Download and extract artifact from Nexus
+      - name: Download & Extract Artifact
+        shell: cmd
+        env:
+          NEXUS_URL: ${{ secrets.NEXUS_URL }}
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+        run: |
+          echo Cleaning old unzips...
+          if exist C:\SSDLC\Nexus_Unzips rmdir /s /q C:\SSDLC\Nexus_Unzips
+          mkdir C:\SSDLC\Nexus_Unzips
+          echo Downloading artifact from Nexus...
+          curl -u %NEXUS_USERNAME%:%NEXUS_PASSWORD% -o C:\SSDLC\Nexus_Unzips\juice-shop.7z %NEXUS_URL%/repository/juice-shop/juice-shop.7z
+          if %ERRORLEVEL% neq 0 (
+            echo ❌ Download failed!
+            exit /b 1
+          )
+          echo Extracting using 7-Zip...
+          "C:\Program Files\7-Zip\7z.exe" x C:\SSDLC\Nexus_Unzips\juice-shop.7z -oC:\SSDLC\Nexus_Unzips -y
+          echo ✅ Extraction complete.
