@@ -9,37 +9,37 @@ jobs:
     timeout-minutes: 30
 
     steps:
-    - name: Start Juice Shop Server
-      shell: powershell
-      run: |
-Write-Host "Starting Juice Shop server..."
-Set-Location "C:\SSDLC\Nexus_Unzips"
+      - name: Start Juice Shop Server
+        shell: powershell
+        run: |
+          Write-Host "Starting Juice Shop server..."
+          Set-Location "C:\SSDLC\Nexus_Unzips"
 
-# Kill any existing process on port 3000
-$connection = Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue
-if ($connection) {
-    $pid = $connection.OwningProcess
-    Write-Host "Port 3000 in use by PID $pid — killing it..."
-    Stop-Process -Id $pid -Force
-}
+          # Kill any existing process on port 3000
+          $connection = Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue
+          if ($connection) {
+              $pid = $connection.OwningProcess
+              Write-Host "Port 3000 in use by PID $pid — killing it..."
+              Stop-Process -Id $pid -Force
+          }
 
-# Start the server in background
-Write-Host "Launching npm start in background..."
-Start-Process powershell -ArgumentList "cd C:\SSDLC\Nexus_Unzips; npm start" -WindowStyle Hidden
+          # Start the server in background
+          Write-Host "Launching npm start in background..."
+          Start-Process powershell -ArgumentList "cd C:\SSDLC\Nexus_Unzips; npm start" -WindowStyle Hidden
 
-Write-Host "Waiting for server to start..."
-Start-Sleep -Seconds 20
+          Write-Host "Waiting for server to start..."
+          Start-Sleep -Seconds 20
 
-# Verify server on localhost:3000
-try {
-    $response = Invoke-WebRequest -Uri "http://localhost:3000" -UseBasicParsing -TimeoutSec 10
-    if ($response.StatusCode -eq 200) {
-        Write-Host "Juice Shop is UP and running on http://localhost:3000"
-    } else {
-        Write-Host "Server returned unexpected status code $($response.StatusCode)"
-        exit 1
-    }
-} catch {
-    Write-Host "Juice Shop server did not start properly!"
-    exit 1
-}
+          # Verify server on localhost:3000
+          try {
+              $response = Invoke-WebRequest -Uri "http://localhost:3000" -UseBasicParsing -TimeoutSec 10
+              if ($response.StatusCode -eq 200) {
+                  Write-Host "Juice Shop is UP and running on http://localhost:3000"
+              } else {
+                  Write-Host "Server returned unexpected status code $($response.StatusCode)"
+                  exit 1
+              }
+          } catch {
+              Write-Host "Juice Shop server did not start properly!"
+              exit 1
+          }
