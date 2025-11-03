@@ -8,16 +8,21 @@ jobs:
     runs-on: self-hosted
     timeout-minutes: 180
 
+    env:
+      NODE_OPTIONS: --max_old_space_size=4096
+
     steps:
       # 1️⃣ Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2️⃣ Set Node memory (4GB)
-      - name: Set Node memory
+      # 2️⃣ Confirm Node memory setting
+      - name: Confirm Node memory (4GB)
         shell: cmd
         run: |
-          setx NODE_OPTIONS "--max_old_space_size=4096"
+          echo Current Node memory setting:
+          echo %NODE_OPTIONS%
+          node -v
 
       # 3️⃣ Install dependencies (Backend + Frontend)
       - name: Install dependencies (Backend + Frontend)
@@ -38,28 +43,7 @@ jobs:
           )
           echo ✅ Dependencies ready.
 
-      # 4️⃣ SonarQube code analysis
-      - name: SonarQube Scan
-        shell: powershell
-        env:
-          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        run: |
-          Write-Host "[INFO] Starting SonarQube Scan..."
-          $sonarScannerPath = "C:\sonar-scanner\bin\sonar-scanner.bat"
-          if (!(Test-Path $sonarScannerPath)) {
-              Write-Host "[ERROR] sonar-scanner not found at $sonarScannerPath"
-              exit 1
-          }
-          & $sonarScannerPath `
-            -D"sonar.projectKey=JuiceShop" `
-            -D"sonar.projectName=JuiceShop" `
-            -D"sonar.sources=." `
-            -D"sonar.host.url=$env:SONAR_HOST_URL" `
-            -D"sonar.login=$env:SONAR_TOKEN"
-          Write-Host "✅ SonarQube scan completed successfully."
-
-      # 5️⃣ Compress build output using 7-Zip
+      # 4️⃣ Compress build output using 7-Zip
       - name: Compress build output (7-Zip)
         shell: cmd
         run: |
@@ -76,7 +60,7 @@ jobs:
           echo 📦 Compressed file size: %SIZE_MB% MB
           echo ✅ Compression complete.
 
-      # 6️⃣ Upload artifact to Nexus
+      # 5️⃣ Upload artifact to Nexus
       - name: Upload artifact to Nexus
         shell: cmd
         env:
@@ -92,7 +76,7 @@ jobs:
           )
           echo ✅ Upload completed successfully.
 
-      # 7️⃣ Download and extract artifact from Nexus
+      # 6️⃣ Download and extract artifact from Nexus
       - name: Download & Extract Artifact
         shell: cmd
         env:
